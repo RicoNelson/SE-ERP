@@ -1,6 +1,6 @@
-import type { Timestamp } from 'firebase/firestore';
+import type { FieldValue, Timestamp } from 'firebase/firestore';
 
-type FirestoreDate = Date | Timestamp;
+type FirestoreDate = Date | Timestamp | FieldValue;
 
 export interface Product {
   id?: string;
@@ -32,6 +32,29 @@ export interface SaleItem {
   unitPrice: number;
   originalPrice: number; // To track if it was negotiated
   costPrice: number; // To calculate profit later
+  totalCost?: number;
+  fifoAllocations?: FifoAllocation[];
+}
+
+export interface FifoAllocation {
+  layerId: string;
+  quantity: number;
+  unitCost: number;
+  unitSellPrice?: number;
+}
+
+export interface InventoryLayer {
+  id?: string;
+  productId: string;
+  quantityReceived: number;
+  quantityRemaining: number;
+  unitCost: number;
+  sellPriceSnapshot?: number;
+  sourceType: 'initial_stock' | 'purchase_receipt';
+  sourceId?: string;
+  receivedAt: FirestoreDate;
+  createdAt?: FirestoreDate;
+  updatedAt?: FirestoreDate;
 }
 
 export interface OperatingExpense {

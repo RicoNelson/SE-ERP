@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { collection, query, where, orderBy, onSnapshot, Timestamp, doc, getDoc, addDoc, serverTimestamp } from 'firebase/firestore';
+import { useState, useEffect, useMemo } from 'react';
+import { collection, query, where, orderBy, onSnapshot, Timestamp, doc, getDoc, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { formatNumber, handleFormattedInputChange, parseNumber } from '../utils/format';
 import { TrendingUp, PackageMinus, Clock, ShoppingBag, Siren, Activity, X, WalletCards, HandCoins } from 'lucide-react';
@@ -23,7 +23,9 @@ interface ActivityLog {
   id: string;
   type: string;
   quantityChange: number;
+  productId?: string;
   productName?: string;
+  note?: string;
   performedAt: Date;
   referenceId?: string;
   referenceType?: string;
@@ -52,6 +54,17 @@ interface ExpenseRecord {
   spentAt: Date;
 }
 
+interface ProductDetailEntry {
+  id: string;
+  type: 'sale' | 'adjustment';
+  performedAt: Date;
+  quantity: number;
+  unitPrice?: number;
+  total?: number;
+  paymentMethod?: string;
+  note?: string;
+}
+
 const EXPENSE_CATEGORIES = [
   'Delivery Fee',
   'Tip Driver',
@@ -61,14 +74,40 @@ const EXPENSE_CATEGORIES = [
   'Lainnya',
 ];
 
+const toDateInputValue = (date: Date) => {
+  const yyyy = date.getFullYear();
+  const mm = `${date.getMonth() + 1}`.padStart(2, '0');
+  const dd = `${date.getDate()}`.padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const parseDateInput = (value: string) => {
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 export default function Reports() {
+  const today = useMemo(() => new Date(), []);
+  const yesterday = useMemo(() => {
+    const next = new Date();
+    next.setDate(next.getDate() - 1);
+    return next;
+  }, []);
+  const [dateFilterMode, setDateFilterMode] = useState<'single' | 'range'>('single');
+  const [singleDate, setSingleDate] = useState(toDateInputValue(today));
+  const [rangeStartDate, setRangeStartDate] = useState(toDateInputValue(today));
+  const [rangeEndDate, setRangeEndDate] = useState(toDateInputValue(today));
   const [stats, setStats] = useState<DailyStats>({ totalRevenue: 0, totalItemsSold: 0, totalCogs: 0 });
   const [productsSold, setProductsSold] = useState<ProductSoldStat[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
   const [lowStockCount, setLowStockCount] = useState(0);
+  const [productNameById, setProductNameById] = useState<Record<string, string>>({});
   const [recentActivity, setRecentActivity] = useState<ActivityLog[]>([]);
   const [selectedSale, setSelectedSale] = useState<SaleDetail | null>(null);
   const [isSaleDetailLoading, setIsSaleDetailLoading] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<ProductSoldStat | null>(null);
+  const [productDetailEntries, setProductDetailEntries] = useState<ProductDetailEntry[]>([]);
+  const [isProductDetailLoading, setIsProductDetailLoading] = useState(false);
   const [expenseCategory, setExpenseCategory] = useState(EXPENSE_CATEGORIES[0]);
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseNote, setExpenseNote] = useState('');
@@ -80,6 +119,28 @@ export default function Reports() {
   const grossProfit = stats.totalRevenue - stats.totalCogs;
   const netPnl = grossProfit - totalExpenses;
   const pnlMargin = stats.totalRevenue > 0 ? (netPnl / stats.totalRevenue) * 100 : 0;
+  const selectedStartDate = dateFilterMode === 'single' ? singleDate : rangeStartDate;
+  const selectedEndDate = dateFilterMode === 'single' ? singleDate : rangeEndDate;
+  const filterLabel = dateFilterMode === 'single'
+    ? new Date(`${singleDate}T00:00:00`).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
+    : `${new Date(`${rangeStartDate}T00:00:00`).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} - ${new Date(`${rangeEndDate}T00:00:00`).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}`;
+
+  const getFilterDateRange = () => {
+    const startDateRaw = parseDateInput(selectedStartDate);
+    const endDateRaw = parseDateInput(selectedEndDate);
+    if (!startDateRaw || !endDateRaw) return null;
+
+    const normalizedStartDate = new Date(startDateRaw);
+    const normalizedEndDate = new Date(endDateRaw);
+    normalizedStartDate.setHours(0, 0, 0, 0);
+    normalizedEndDate.setHours(0, 0, 0, 0);
+    if (normalizedEndDate < normalizedStartDate) return null;
+
+    const endExclusive = new Date(normalizedEndDate);
+    endExclusive.setDate(endExclusive.getDate() + 1);
+
+    return { normalizedStartDate, endExclusive };
+  };
 
   const handleOpenSaleDetail = async (activity: ActivityLog) => {
     if (activity.type !== 'sale' || !activity.referenceId) return;
@@ -110,6 +171,82 @@ export default function Reports() {
     }
   };
 
+  const handleOpenProductDetail = async (product: ProductSoldStat) => {
+    const range = getFilterDateRange();
+    if (!range) return;
+
+    setSelectedProduct(product);
+    setProductDetailEntries([]);
+    setIsProductDetailLoading(true);
+
+    try {
+      const salesQuery = query(
+        collection(db, 'sales'),
+        where('soldAt', '>=', Timestamp.fromDate(range.normalizedStartDate)),
+        where('soldAt', '<', Timestamp.fromDate(range.endExclusive)),
+        orderBy('soldAt', 'desc')
+      );
+      const adjustmentsQuery = query(
+        collection(db, 'stock_movements'),
+        where('productId', '==', product.productId),
+        where('performedAt', '>=', Timestamp.fromDate(range.normalizedStartDate)),
+        where('performedAt', '<', Timestamp.fromDate(range.endExclusive)),
+        orderBy('performedAt', 'desc')
+      );
+
+      const [salesSnapshot, adjustmentsSnapshot] = await Promise.all([
+        getDocs(salesQuery),
+        getDocs(adjustmentsQuery),
+      ]);
+
+      const saleEntries: ProductDetailEntry[] = [];
+      salesSnapshot.docs.forEach((saleDoc) => {
+        const saleData = saleDoc.data();
+        const soldAt = saleData.soldAt?.toDate?.() || new Date();
+        const paymentMethod = saleData.paymentMethod || 'Tidak diketahui';
+        const items = Array.isArray(saleData.items) ? saleData.items : [];
+
+        items.forEach((item: { productId?: string; quantity?: number; unitPrice?: number; }) => {
+          if (item.productId !== product.productId) return;
+          const quantity = item.quantity || 0;
+          const unitPrice = item.unitPrice || 0;
+          saleEntries.push({
+            id: saleDoc.id,
+            type: 'sale',
+            performedAt: soldAt,
+            quantity,
+            unitPrice,
+            total: quantity * unitPrice,
+            paymentMethod,
+          });
+        });
+      });
+
+      const adjustmentEntries: ProductDetailEntry[] = adjustmentsSnapshot.docs
+        .map((adjustmentDoc) => {
+          const data = adjustmentDoc.data();
+          return {
+            id: adjustmentDoc.id,
+            type: 'adjustment' as const,
+            performedAt: data.performedAt?.toDate?.() || new Date(),
+            quantity: data.quantityChange || 0,
+            note: data.note || '',
+          };
+        })
+        .filter((entry) => entry.type === 'adjustment');
+
+      const merged = [...saleEntries, ...adjustmentEntries].sort(
+        (a, b) => b.performedAt.getTime() - a.performedAt.getTime()
+      );
+      setProductDetailEntries(merged);
+    } catch (error) {
+      console.error('Error loading product details in report:', error);
+      alert('Gagal memuat detail produk.');
+    } finally {
+      setIsProductDetailLoading(false);
+    }
+  };
+
   const handleSaveExpense = async () => {
     const amount = parseNumber(expenseAmount);
     if (amount <= 0 || !expenseCategory || isSavingExpense) return;
@@ -135,12 +272,17 @@ export default function Reports() {
   };
 
   useEffect(() => {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const range = getFilterDateRange();
+    if (!range) return;
+    const { normalizedStartDate, endExclusive } = range;
+
+    setLoading(true);
 
     const salesQuery = query(
       collection(db, 'sales'),
-      where('soldAt', '>=', Timestamp.fromDate(startOfToday))
+      where('soldAt', '>=', Timestamp.fromDate(normalizedStartDate)),
+      where('soldAt', '<', Timestamp.fromDate(endExclusive)),
+      orderBy('soldAt', 'desc')
     );
 
     const unsubSales = onSnapshot(salesQuery, (snapshot) => {
@@ -154,14 +296,14 @@ export default function Reports() {
         revenue += data.total || 0;
 
         if (data.items && Array.isArray(data.items)) {
-          data.items.forEach((item: { productId?: string; productNameSnapshot?: string; quantity?: number; unitPrice?: number; costPrice?: number; }) => {
+          data.items.forEach((item: { productId?: string; productNameSnapshot?: string; quantity?: number; unitPrice?: number; costPrice?: number; totalCost?: number; }) => {
             const quantity = item.quantity || 0;
             const unitPrice = item.unitPrice || 0;
             const costPrice = item.costPrice || 0;
             const productId = item.productId || 'unknown-product';
 
             itemsSold += quantity;
-            cogs += quantity * costPrice;
+            cogs += item.totalCost ?? (quantity * costPrice);
 
             const existingStat = productStatsMap.get(productId) || {
               productId,
@@ -183,7 +325,8 @@ export default function Reports() {
 
     const expensesQuery = query(
       collection(db, 'operating_expenses'),
-      where('spentAt', '>=', Timestamp.fromDate(startOfToday)),
+      where('spentAt', '>=', Timestamp.fromDate(normalizedStartDate)),
+      where('spentAt', '<', Timestamp.fromDate(endExclusive)),
       orderBy('spentAt', 'desc')
     );
     const unsubExpenses = onSnapshot(expensesQuery, (snapshot) => {
@@ -203,17 +346,22 @@ export default function Reports() {
     const productsQuery = query(collection(db, 'products'));
     const unsubProducts = onSnapshot(productsQuery, (snapshot) => {
       let lowCount = 0;
+      const names: Record<string, string> = {};
       snapshot.forEach((doc) => {
         const data = doc.data();
+        names[doc.id] = data.name || 'Produk';
         if (data.stockQty <= data.lowStockThreshold) {
           lowCount++;
         }
       });
+      setProductNameById(names);
       setLowStockCount(lowCount);
     });
 
     const activityQuery = query(
       collection(db, 'stock_movements'),
+      where('performedAt', '>=', Timestamp.fromDate(normalizedStartDate)),
+      where('performedAt', '<', Timestamp.fromDate(endExclusive)),
       orderBy('performedAt', 'desc')
     );
 
@@ -222,7 +370,7 @@ export default function Reports() {
       let count = 0;
 
       for (const docSnapshot of snapshot.docs) {
-        if (count >= 10) break;
+        if (count >= 30) break;
 
         const data = docSnapshot.data();
 
@@ -230,8 +378,10 @@ export default function Reports() {
           id: docSnapshot.id,
           type: data.type,
           quantityChange: data.quantityChange,
+          productId: data.productId,
           referenceId: data.referenceId,
           referenceType: data.referenceType,
+          note: data.note,
           performedAt: data.performedAt?.toDate() || new Date(),
         });
         count++;
@@ -247,7 +397,7 @@ export default function Reports() {
       unsubProducts();
       unsubActivity();
     };
-  }, []);
+  }, [selectedStartDate, selectedEndDate]);
 
   if (loading) {
     return <div className="p-4 text-center text-slate-500 mt-10">Memuat laporan...</div>;
@@ -256,11 +406,85 @@ export default function Reports() {
   return (
     <div className="ai-page page-enter">
       <section className="ai-card ai-page-hero stagger-fade-in">
-        <p className="ai-kicker mb-2">Laporan Harian</p>
-        <h2 className="ai-heading text-2xl font-bold text-slate-900">Ringkasan Hari Ini</h2>
+        <p className="ai-kicker mb-2">Laporan Periode</p>
+        <h2 className="ai-heading text-2xl font-bold text-slate-900">Ringkasan {filterLabel}</h2>
         <p className="mt-3 text-sm leading-6 text-slate-600">
           Ikhtisar performa penjualan, stok kritis, dan aktivitas operasional dalam satu tampilan yang rapi dan mudah dibaca.
         </p>
+      </section>
+
+      <section className="ai-card mt-4 p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setDateFilterMode('single');
+              setSingleDate(toDateInputValue(today));
+            }}
+            className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${dateFilterMode === 'single' && singleDate === toDateInputValue(today) ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+          >
+            Hari Ini
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDateFilterMode('single');
+              setSingleDate(toDateInputValue(yesterday));
+            }}
+            className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${dateFilterMode === 'single' && singleDate === toDateInputValue(yesterday) ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700'}`}
+          >
+            Kemarin
+          </button>
+          <button
+            type="button"
+            onClick={() => setDateFilterMode('single')}
+            className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${dateFilterMode === 'single' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}
+          >
+            Per Tanggal
+          </button>
+          <button
+            type="button"
+            onClick={() => setDateFilterMode('range')}
+            className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${dateFilterMode === 'range' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}
+          >
+            Rentang Tanggal
+          </button>
+        </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {dateFilterMode === 'single' ? (
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Tanggal</label>
+              <input
+                type="date"
+                className="ai-input w-full px-3 py-2.5"
+                value={singleDate}
+                onChange={(e) => setSingleDate(e.target.value)}
+              />
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Dari Tanggal</label>
+                <input
+                  type="date"
+                  className="ai-input w-full px-3 py-2.5"
+                  value={rangeStartDate}
+                  onChange={(e) => setRangeStartDate(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Sampai Tanggal</label>
+                <input
+                  type="date"
+                  className="ai-input w-full px-3 py-2.5"
+                  value={rangeEndDate}
+                  min={rangeStartDate}
+                  onChange={(e) => setRangeEndDate(e.target.value)}
+                />
+              </div>
+            </>
+          )}
+        </div>
       </section>
 
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -322,7 +546,7 @@ export default function Reports() {
             <div className="ai-stat-orb">
               <HandCoins className="h-5 w-5 text-sky-700" />
             </div>
-            <h3 className="font-bold text-slate-900">Biaya Operasional Hari Ini</h3>
+            <h3 className="font-bold text-slate-900">Biaya Operasional ({filterLabel})</h3>
           </div>
           <span className="text-sm font-semibold text-slate-500">Rp {formatNumber(totalExpenses)}</span>
         </div>
@@ -381,7 +605,7 @@ export default function Reports() {
           <div className="ai-divider my-4" />
 
           {expenses.length === 0 ? (
-            <p className="text-sm text-slate-500">Belum ada biaya hari ini.</p>
+            <p className="text-sm text-slate-500">Belum ada biaya pada periode ini.</p>
           ) : (
             <div className="space-y-2">
               {expenses.map((expense) => (
@@ -412,19 +636,26 @@ export default function Reports() {
         </div>
         <div className="ai-card overflow-hidden">
           {productsSold.length === 0 ? (
-            <div className="p-6 text-center text-sm text-slate-400">Belum ada produk terjual hari ini</div>
+            <div className="p-6 text-center text-sm text-slate-400">Belum ada produk terjual pada periode ini</div>
           ) : (
             <div className="divide-y divide-white/6">
               {productsSold.map((prod, index) => (
-                <div key={prod.productId} className="p-4 flex items-center justify-between">
+                <button
+                  key={prod.productId}
+                  type="button"
+                  onClick={() => handleOpenProductDetail(prod)}
+                  className="w-full p-4 text-left transition-colors hover:bg-slate-50"
+                >
+                  <div className="flex items-center justify-between">
                   <div>
                     <p className="font-medium leading-tight text-slate-900">{prod.productName}</p>
-                    <p className="mt-1 text-xs text-slate-400">Rp {formatNumber(prod.revenue)}</p>
+                    <p className="mt-1 text-xs text-slate-400">Rp {formatNumber(prod.revenue)} · Ketuk untuk detail</p>
                   </div>
                   <div className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-1 text-lg font-bold text-slate-900">
                     #{index + 1} · {formatNumber(prod.quantity)}
                   </div>
-                </div>
+                  </div>
+                </button>
               ))}
             </div>
           )}
@@ -471,12 +702,13 @@ export default function Reports() {
         
         <div className="ai-card overflow-hidden">
           {recentActivity.length === 0 ? (
-            <div className="p-6 text-center text-sm text-slate-400">Belum ada aktivitas hari ini</div>
+            <div className="p-6 text-center text-sm text-slate-400">Belum ada aktivitas pada periode ini</div>
           ) : (
             <div className="divide-y divide-white/6">
               {recentActivity.map((activity) => {
                 const isSale = activity.type === 'sale';
                 const canOpenSaleDetail = isSale && activity.referenceType === 'sale' && !!activity.referenceId;
+                const productName = activity.productId ? productNameById[activity.productId] : undefined;
                 return (
                   <div key={activity.id} className="p-4 flex items-center justify-between">
                     <div className="flex-1 pr-4">
@@ -487,7 +719,7 @@ export default function Reports() {
                           className="text-left"
                         >
                           <p className="font-medium text-sky-700 underline decoration-sky-200 underline-offset-2">
-                            Penjualan
+                            Penjualan {productName ? `· ${productName}` : ''}
                           </p>
                           <p className="mt-0.5 text-xs text-slate-400">
                             {activity.performedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} · Ketuk untuk detail
@@ -496,10 +728,11 @@ export default function Reports() {
                       ) : (
                         <>
                           <p className="font-medium text-slate-900">
-                            {isSale ? 'Penjualan' : 'Penyesuaian Stok'}
+                            {isSale ? 'Penjualan' : 'Penyesuaian Stok'} {productName ? `· ${productName}` : ''}
                           </p>
                           <p className="mt-0.5 text-xs text-slate-400">
                             {activity.performedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                            {activity.note ? ` · ${activity.note}` : ''}
                           </p>
                         </>
                       )}
@@ -565,6 +798,74 @@ export default function Reports() {
                 <p className="font-semibold text-slate-700">Total</p>
                 <p className="text-lg font-bold text-slate-900">Rp {formatNumber(selectedSale.total)}</p>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedProduct && (
+        <div className="ai-modal-shell">
+          <div className="ai-modal-backdrop" onClick={() => setSelectedProduct(null)} />
+          <div className="ai-modal-panel page-enter translate-y-0 scale-100">
+            <div className="flex items-center justify-between p-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Detail Produk</h2>
+                <p className="mt-0.5 text-sm text-slate-600">{selectedProduct.productName}</p>
+                <p className="mt-0.5 text-xs text-slate-500">Periode {filterLabel}</p>
+              </div>
+              <button onClick={() => setSelectedProduct(null)} className="ai-button-ghost rounded-full p-2 text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="ai-divider" />
+            <div className="max-h-[60vh] overflow-y-auto p-4">
+              {isProductDetailLoading ? (
+                <p className="text-sm text-slate-500">Memuat detail produk...</p>
+              ) : productDetailEntries.length === 0 ? (
+                <p className="text-sm text-slate-500">Belum ada detail transaksi pada periode ini.</p>
+              ) : (
+                <div className="space-y-3">
+                  {productDetailEntries.map((entry, idx) => {
+                    const isSaleEntry = entry.type === 'sale';
+                    return (
+                      <div key={`${entry.id}-${idx}`} className="rounded-xl border border-slate-200/80 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className={`text-sm font-semibold ${isSaleEntry ? 'text-sky-700' : 'text-emerald-700'}`}>
+                              {isSaleEntry ? 'Penjualan' : 'Penyesuaian Stok'}
+                            </p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {entry.performedAt.toLocaleString('id-ID', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          </div>
+                          <div className={`text-sm font-bold ${entry.quantity < 0 ? 'text-rose-500' : 'text-emerald-600'}`}>
+                            {entry.quantity > 0 ? '+' : ''}{formatNumber(entry.quantity)}
+                          </div>
+                        </div>
+                        {isSaleEntry ? (
+                          <div className="mt-2 text-sm text-slate-600">
+                            <p>#{entry.id}</p>
+                            <p>{formatNumber(Math.abs(entry.quantity))} x Rp {formatNumber(entry.unitPrice || 0)}</p>
+                            <p className="font-semibold text-slate-900">Total Rp {formatNumber(entry.total || 0)}</p>
+                            <p className="text-xs text-slate-500">Metode: {entry.paymentMethod}</p>
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-sm text-slate-600">
+                            <p>Ref: {entry.id}</p>
+                            <p>{entry.note || 'Penyesuaian stok manual.'}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>

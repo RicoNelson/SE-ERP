@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Search, Trash2, Edit3, ChevronDown, ShoppingBag, CreditCard } from 'lucide-react';
-import { doc, writeBatch, serverTimestamp, collection } from 'firebase/firestore';
+import { doc, serverTimestamp, collection, runTransaction, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
-import type { Product } from '../types';
+import type { Product, InventoryLayer, FifoAllocation } from '../types';
 import { formatNumber, handleFormattedInputChange, parseNumber } from '../utils/format';
 import ProductSearchModal from '../components/ProductSearchModal';
 
@@ -44,17 +44,44 @@ export default function Sell() {
 
   const handlePriceChange = (id: string, value: string) => {
     const { formatted } = handleFormattedInputChange(value);
-    
-    setCart(cart.map(item => 
-      item.id === id ? { ...item, cartPrice: formatted } : item
+    setCart(cart.map((item) =>
+      item.id === id ? { ...item, cartPrice: formatted } : item,
     ));
+  };
+
+  const getOldestLayerSellPrice = async (productId: string, fallbackSellPrice: number): Promise<number> => {
+    try {
+      const layersQuery = query(
+        collection(db, 'inventory_layers'),
+        where('productId', '==', productId),
+      );
+      const layersSnapshot = await getDocs(layersQuery);
+
+      const oldestAvailable = layersSnapshot.docs
+        .map((layerDoc) => layerDoc.data() as InventoryLayer)
+        .filter((layer) => (layer.quantityRemaining || 0) > 0)
+        .sort((a, b) => {
+          const aTime = 'toDate' in (a.receivedAt as object)
+            ? (a.receivedAt as { toDate: () => Date }).toDate().getTime()
+            : new Date(a.receivedAt as unknown as string).getTime();
+          const bTime = 'toDate' in (b.receivedAt as object)
+            ? (b.receivedAt as { toDate: () => Date }).toDate().getTime()
+            : new Date(b.receivedAt as unknown as string).getTime();
+          return aTime - bTime;
+        })[0];
+
+      return oldestAvailable?.sellPriceSnapshot ?? fallbackSellPrice;
+    } catch (error) {
+      console.error('Error reading oldest FIFO layer sell price:', error);
+      return fallbackSellPrice;
+    }
   };
 
   const removeFromCart = (id: string) => {
     setCart(cart.filter(item => item.id !== id));
   };
 
-  const handleAddProduct = (product: Product) => {
+  const handleAddProduct = async (product: Product) => {
     // Check if already in cart
     const existing = cart.find(item => item.id === product.id);
     if (existing) {
@@ -62,72 +89,168 @@ export default function Sell() {
       const currentQty = parseNumber(existing.cartQuantity);
       handleQuantityChange(product.id!, (currentQty + 1).toString());
     } else {
+      const defaultSellPrice = await getOldestLayerSellPrice(product.id!, product.sellPrice);
       // Add new to cart
-      setCart([...cart, { ...product, cartQuantity: '1', cartPrice: formatNumber(product.sellPrice) }]);
+      setCart([...cart, { ...product, cartQuantity: '1', cartPrice: formatNumber(defaultSellPrice) }]);
     }
     setIsSearchOpen(false);
   };
 
   const handleConfirmSale = async () => {
     if (cart.length === 0 || isProcessing) return;
-    
+
+    const cartWithParsedQty = cart.map((item) => ({
+      ...item,
+      parsedQuantity: parseNumber(item.cartQuantity),
+      parsedUnitPrice: parseNumber(item.cartPrice),
+    }));
+
+    const hasInvalidQty = cartWithParsedQty.some((item) => item.parsedQuantity <= 0);
+    if (hasInvalidQty) {
+      alert('Jumlah produk harus lebih dari 0.');
+      return;
+    }
+
+    const hasInvalidPrice = cartWithParsedQty.some((item) => item.parsedUnitPrice <= 0);
+    if (hasInvalidPrice) {
+      alert('Harga jual harus lebih dari 0.');
+      return;
+    }
+
     setIsProcessing(true);
 
     try {
-      const batch = writeBatch(db);
-      
-      // 1. Create the sale record
-      const saleRef = doc(collection(db, 'sales'));
-      const saleItems = cart.map(item => ({
-        productId: item.id!,
-        productNameSnapshot: item.name,
-        quantity: parseNumber(item.cartQuantity),
-        unitPrice: parseNumber(item.cartPrice),
-        originalPrice: item.sellPrice,
-        costPrice: item.costPrice || 0
-      }));
+      await runTransaction(db, async (transaction) => {
+        const saleRef = doc(collection(db, 'sales'));
+        let computedSaleTotal = 0;
+        const saleItems: Array<{
+          productId: string;
+          productNameSnapshot: string;
+          quantity: number;
+          unitPrice: number;
+          originalPrice: number;
+          costPrice: number;
+          totalCost: number;
+          fifoAllocations: FifoAllocation[];
+        }> = [];
 
-      batch.set(saleRef, {
-        items: saleItems,
-        total: total,
-        paymentMethod: paymentMethod,
-        soldBy: currentUser?.uid || 'unknown',
-        soldAt: serverTimestamp()
+        for (const item of cartWithParsedQty) {
+          const productId = item.id!;
+          const quantityToSell = item.parsedQuantity;
+          const productRef = doc(db, 'products', productId);
+          const productSnap = await transaction.get(productRef);
+
+          if (!productSnap.exists()) {
+            throw new Error(`Produk ${item.name} tidak ditemukan.`);
+          }
+
+          const productData = productSnap.data() as Product;
+          const currentStock = productData.stockQty || 0;
+
+          const layersQuery = query(
+            collection(db, 'inventory_layers'),
+            where('productId', '==', productId)
+          );
+          const layersSnapshot = await getDocs(layersQuery);
+          const sortedLayerDocs = [...layersSnapshot.docs].sort((a, b) => {
+            const aDate = (a.data().receivedAt?.toDate?.() as Date | undefined)?.getTime() || 0;
+            const bDate = (b.data().receivedAt?.toDate?.() as Date | undefined)?.getTime() || 0;
+            return aDate - bDate;
+          });
+
+          let remainingToAllocate = quantityToSell;
+          let totalCost = 0;
+          const allocations: FifoAllocation[] = [];
+
+          for (const layerDoc of sortedLayerDocs) {
+            if (remainingToAllocate <= 0) break;
+            const layerData = layerDoc.data() as InventoryLayer;
+            const available = layerData.quantityRemaining || 0;
+
+            if (available <= 0) continue;
+
+            const allocatedQty = Math.min(available, remainingToAllocate);
+            const newRemaining = available - allocatedQty;
+            const unitCost = layerData.unitCost || 0;
+            transaction.update(layerDoc.ref, {
+              quantityRemaining: newRemaining,
+              updatedAt: serverTimestamp(),
+            });
+
+            allocations.push({
+              layerId: layerDoc.id,
+              quantity: allocatedQty,
+              unitCost,
+              unitSellPrice: item.parsedUnitPrice,
+            });
+
+            totalCost += allocatedQty * unitCost;
+            remainingToAllocate -= allocatedQty;
+          }
+
+          if (remainingToAllocate > 0) {
+            const fallbackUnitCost = productData.costPrice || 0;
+            allocations.push({
+              layerId: 'negative_stock',
+              quantity: remainingToAllocate,
+              unitCost: fallbackUnitCost,
+              unitSellPrice: item.parsedUnitPrice,
+            });
+            totalCost += remainingToAllocate * fallbackUnitCost;
+          }
+
+          const totalRevenue = quantityToSell * item.parsedUnitPrice;
+          computedSaleTotal += totalRevenue;
+          const avgCost = quantityToSell > 0 ? totalCost / quantityToSell : 0;
+          const movementRef = doc(collection(db, 'stock_movements'));
+
+          transaction.update(productRef, {
+            stockQty: currentStock - quantityToSell,
+            updatedAt: serverTimestamp(),
+          });
+
+          transaction.set(movementRef, {
+            productId,
+            type: 'sale',
+            quantityChange: -quantityToSell,
+            referenceId: saleRef.id,
+            referenceType: 'sale',
+            performedBy: currentUser?.uid || 'unknown',
+            performedAt: serverTimestamp(),
+            fifoAllocations: allocations,
+            totalCost,
+            totalRevenue,
+            unitCost: avgCost,
+          });
+
+          saleItems.push({
+            productId,
+            productNameSnapshot: item.name,
+            quantity: quantityToSell,
+            unitPrice: item.parsedUnitPrice,
+            originalPrice: item.parsedUnitPrice,
+            costPrice: avgCost,
+            totalCost,
+            fifoAllocations: allocations,
+          });
+        }
+
+        transaction.set(saleRef, {
+          items: saleItems,
+          total: computedSaleTotal,
+          paymentMethod: paymentMethod,
+          soldBy: currentUser?.uid || 'unknown',
+          soldAt: serverTimestamp()
+        });
       });
 
-      // 2. Update stock quantities for each product
-      cart.forEach(item => {
-        const productRef = doc(db, 'products', item.id!);
-        const newStockQty = item.stockQty - parseNumber(item.cartQuantity);
-        
-        batch.update(productRef, {
-          stockQty: newStockQty,
-          updatedAt: serverTimestamp()
-        });
-
-        // 3. Create stock movement record
-        const movementRef = doc(collection(db, 'stock_movements'));
-        batch.set(movementRef, {
-          productId: item.id!,
-          type: 'sale',
-          quantityChange: -parseNumber(item.cartQuantity),
-          referenceId: saleRef.id,
-          referenceType: 'sale',
-          performedBy: currentUser?.uid || 'unknown',
-          performedAt: serverTimestamp()
-        });
-      });
-
-      // Execute all writes as a single atomic transaction
-      await batch.commit();
-      
-      // Clear cart on success
       setCart([]);
-      alert('Penjualan berhasil dicatat dan stok telah dikurangi!');
+      alert('Penjualan berhasil dicatat dengan metode FIFO dan stok telah dikurangi.');
 
     } catch (error) {
       console.error("Error completing sale:", error);
-      alert('Gagal memproses penjualan. Silakan coba lagi.');
+      const message = error instanceof Error ? error.message : 'Gagal memproses penjualan. Silakan coba lagi.';
+      alert(message);
     } finally {
       setIsProcessing(false);
     }
@@ -145,7 +268,7 @@ export default function Sell() {
               </div>
             </div>
             <p className="max-w-lg text-sm leading-6 text-slate-600">
-              Tambah produk, atur jumlah, lalu konfirmasi pembayaran tanpa gangguan visual.
+              Tambah produk, atur jumlah, lalu konfirmasi pembayaran.
             </p>
             <button
               onClick={() => setIsSearchOpen(true)}
@@ -185,50 +308,60 @@ export default function Sell() {
               cart.map((item, index) => (
                 <div
                   key={item.id}
-                  className="ai-card ai-card-hover stagger-fade-in p-4"
+                  className="ai-card ai-card-hover stagger-fade-in overflow-hidden p-4"
                   style={{ animationDelay: `${index * 70}ms` }}
                 >
-                  <div className="mb-4 flex items-start justify-between">
-                    <div className="flex-1 pr-3">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
                       <div className="mb-2 flex items-center gap-2">
-                        <span className="inline-flex rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
-                          Produk aktif
+                        <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-sky-700">
+                          Produk Aktif
                         </span>
-                        <span className="text-xs text-slate-500">Stok {formatNumber(item.stockQty)}</span>
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-medium text-slate-600">
+                          Stok {formatNumber(item.stockQty)}
+                        </span>
                       </div>
-                      <h3 className="mb-1 font-semibold leading-tight text-slate-900">{item.name}</h3>
-                      
+                      <h3 className="truncate text-lg font-bold leading-tight text-slate-900">{item.name}</h3>
+                    </div>
+                    <button 
+                      onClick={() => removeFromCart(item.id!)}
+                      className="ai-button-ghost shrink-0 rounded-xl p-2.5 text-rose-500 hover:text-rose-600"
+                      aria-label={`Hapus ${item.name}`}
+                    >
+                      <Trash2 className="h-5 w-5" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+                        Harga Jual (Invoice Ini)
+                      </label>
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-slate-500">Rp</span>
+                        <span className="rounded-lg bg-slate-100 px-2.5 py-2 text-sm font-semibold text-slate-600">Rp</span>
                         <input
                           type="text"
                           inputMode="numeric"
-                          className="ai-input flex-1 px-3 py-2 text-sm font-semibold text-slate-900"
+                          className="ai-input flex-1 px-3 py-2.5 text-base font-semibold text-slate-900"
                           value={item.cartPrice}
                           onChange={(e) => handlePriceChange(item.id!, e.target.value)}
                         />
                         <Edit3 className="h-4 w-4 text-slate-500" />
                       </div>
                     </div>
-                    <button 
-                      onClick={() => removeFromCart(item.id!)}
-                      className="ai-button-ghost p-2.5 text-rose-500 hover:text-rose-600"
-                    >
-                      <Trash2 className="h-5 w-5" />
-                    </button>
-                  </div>
-                  
-                  <div className="ai-panel-muted flex items-center justify-between p-3">
-                    <label className="text-sm font-medium text-slate-700">
-                      Jumlah Terjual
-                    </label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      className="ai-input w-24 px-3 py-2 text-center text-lg font-bold"
-                      value={item.cartQuantity}
-                      onChange={(e) => handleQuantityChange(item.id!, e.target.value)}
-                    />
+
+                    <div className="ai-panel-muted flex items-center justify-between rounded-2xl p-3">
+                      <label className="text-sm font-semibold text-slate-700">
+                        Jumlah Terjual
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="ai-input w-28 px-3 py-2.5 text-center text-lg font-bold"
+                        value={item.cartQuantity}
+                        onChange={(e) => handleQuantityChange(item.id!, e.target.value)}
+                      />
+                    </div>
                   </div>
                 </div>
               ))

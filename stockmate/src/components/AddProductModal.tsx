@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { X } from 'lucide-react';
 import type { Product } from '../types';
 import { handleFormattedInputChange, parseNumber } from '../utils/format';
+import { useAuth } from '../contexts/AuthContext';
 
 interface AddProductModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface AddProductModalProps {
 export default function AddProductModal({ isOpen, onClose }: AddProductModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const { currentUser } = useAuth();
   
   const [formData, setFormData] = useState({
     name: '',
@@ -47,19 +49,54 @@ export default function AddProductModal({ isOpen, onClose }: AddProductModalProp
     setError('');
 
     try {
+      const stockQty = parseNumber(formData.stockQty);
+      const costPrice = parseNumber(formData.costPrice);
       const productData: Product = {
         name: formData.name,
         sku: formData.sku,
         sellPrice: parseNumber(formData.sellPrice),
-        costPrice: parseNumber(formData.costPrice),
-        stockQty: parseNumber(formData.stockQty),
+        costPrice,
+        stockQty,
         lowStockThreshold: parseNumber(formData.lowStockThreshold),
         isActive: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
 
-      await addDoc(collection(db, 'products'), productData);
+      const batch = writeBatch(db);
+      const productRef = doc(collection(db, 'products'));
+      batch.set(productRef, productData);
+
+      if (stockQty > 0) {
+        const layerRef = doc(collection(db, 'inventory_layers'));
+        batch.set(layerRef, {
+          productId: productRef.id,
+          quantityReceived: stockQty,
+          quantityRemaining: stockQty,
+          unitCost: costPrice,
+          sellPriceSnapshot: parseNumber(formData.sellPrice),
+          sourceType: 'initial_stock',
+          sourceId: productRef.id,
+          receivedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        const movementRef = doc(collection(db, 'stock_movements'));
+        batch.set(movementRef, {
+          productId: productRef.id,
+          type: 'stock_in',
+          quantityChange: stockQty,
+          unitCost: costPrice,
+          layerId: layerRef.id,
+          referenceId: productRef.id,
+          referenceType: 'initial_stock',
+          performedBy: currentUser?.uid || 'unknown',
+          performedAt: serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
       setFormData({ name: '', sku: '', sellPrice: '', costPrice: '', stockQty: '0', lowStockThreshold: '5' });
       onClose();
     } catch (err: unknown) {
