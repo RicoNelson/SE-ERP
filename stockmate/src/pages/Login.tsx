@@ -13,6 +13,7 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [sendCodeCooldownSec, setSendCodeCooldownSec] = useState(0);
   
   const navigate = useNavigate();
 
@@ -38,6 +39,14 @@ export default function Login() {
     };
   }, []);
 
+  useEffect(() => {
+    if (sendCodeCooldownSec <= 0) return;
+    const timer = window.setInterval(() => {
+      setSendCodeCooldownSec((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [sendCodeCooldownSec]);
+
   const formatPhoneNumber = (phone: string) => {
     // Basic formatting: ensure it starts with +62 if not provided
     let formatted = phone.replace(/\D/g, '');
@@ -49,10 +58,80 @@ export default function Login() {
     return '+' + formatted;
   };
 
+  const createRecaptchaVerifier = async () => {
+    if (window.recaptchaVerifier) {
+      window.recaptchaVerifier.clear();
+      window.recaptchaVerifier = undefined;
+    }
+
+    const verifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+      size: 'invisible',
+    });
+
+    window.recaptchaVerifier = verifier;
+    await verifier.render();
+    return verifier;
+  };
+
+  const getAuthErrorCode = (value: unknown): string | null => {
+    if (!value || typeof value !== 'object') return null;
+    const code = Reflect.get(value, 'code');
+    return typeof code === 'string' ? code : null;
+  };
+
+  const isTooManyRequestsError = (value: unknown) => getAuthErrorCode(value) === 'auth/too-many-requests';
+
+  const getSendCodeErrorMessage = (value: unknown) => {
+    const code = getAuthErrorCode(value);
+    if (!code) return 'Gagal mengirim kode. Periksa nomor HP Anda.';
+
+    if (code === 'auth/billing-not-enabled') {
+      return 'OTP belum aktif. Billing Firebase belum dinyalakan. Aktifkan paket Blaze di Firebase Console.';
+    }
+    if (code === 'auth/invalid-app-credential') {
+      return 'Kredensial aplikasi tidak valid. Biasanya token reCAPTCHA kedaluwarsa atau domain belum diizinkan. Coba refresh halaman.';
+    }
+    if (code === 'auth/invalid-phone-number') {
+      return 'Nomor HP tidak valid. Gunakan format Indonesia yang benar.';
+    }
+    if (code === 'auth/too-many-requests') {
+      return 'Terlalu banyak percobaan. Coba lagi beberapa saat.';
+    }
+    if (code === 'auth/quota-exceeded') {
+      return 'Kuota OTP Firebase habis. Coba lagi nanti.';
+    }
+    if (code === 'auth/captcha-check-failed') {
+      return 'Verifikasi reCAPTCHA gagal. Muat ulang halaman lalu coba lagi.';
+    }
+
+    return `Gagal mengirim kode (${code}).`;
+  };
+
+  const getVerifyCodeErrorMessage = (value: unknown) => {
+    const code = getAuthErrorCode(value);
+    if (!code) return 'Kode OTP salah.';
+
+    if (code === 'auth/invalid-verification-code') {
+      return 'Kode OTP salah.';
+    }
+    if (code === 'auth/code-expired' || code === 'auth/session-expired') {
+      return 'Kode OTP sudah kedaluwarsa. Minta kode baru.';
+    }
+    if (code === 'auth/too-many-requests') {
+      return 'Terlalu banyak percobaan verifikasi. Coba lagi beberapa saat.';
+    }
+
+    return `Verifikasi gagal (${code}).`;
+  };
+
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phoneNumber) {
       setError('Masukkan nomor HP');
+      return;
+    }
+    if (sendCodeCooldownSec > 0) {
+      setError(`Terlalu banyak percobaan. Coba lagi dalam ${sendCodeCooldownSec} detik.`);
       return;
     }
 
@@ -61,21 +140,20 @@ export default function Login() {
 
     try {
       const formattedPhone = formatPhoneNumber(phoneNumber);
-      
-      if (!window.recaptchaVerifier) {
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-          size: 'invisible'
-        });
-      }
-      
-      const appVerifier = window.recaptchaVerifier;
+      const appVerifier = await createRecaptchaVerifier();
       const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
       
       setConfirmationResult(confirmation);
       setStep('otp');
     } catch (err: unknown) {
       console.error(err);
-      setError('Gagal mengirim kode. Periksa nomor HP Anda.');
+      if (isTooManyRequestsError(err)) {
+        const cooldown = 60;
+        setSendCodeCooldownSec(cooldown);
+        setError(`Terlalu banyak percobaan. Coba lagi dalam ${cooldown} detik.`);
+      } else {
+        setError(getSendCodeErrorMessage(err));
+      }
       
       // Reset reCAPTCHA on error
       if (window.recaptchaVerifier) {
@@ -101,9 +179,9 @@ export default function Login() {
 
     try {
       await confirmationResult.confirm(otp);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error(err);
-      setError('Kode Salah');
+      setError(getVerifyCodeErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -160,10 +238,10 @@ export default function Login() {
 
             <button 
               type="submit" 
-              disabled={loading}
+              disabled={loading || sendCodeCooldownSec > 0}
               className="ai-button inline-flex w-full items-center justify-center gap-2 px-4 py-3 font-semibold disabled:opacity-50"
             >
-              {loading ? 'MENGIRIM...' : 'KIRIM KODE OTP'}
+              {loading ? 'MENGIRIM...' : sendCodeCooldownSec > 0 ? `TUNGGU ${sendCodeCooldownSec} DETIK` : 'KIRIM KODE OTP'}
               {!loading && <ChevronRight className="h-4 w-4" />}
             </button>
           </form>
