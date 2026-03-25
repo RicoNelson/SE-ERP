@@ -149,12 +149,12 @@ export default function Sell() {
             </p>
             <button
               onClick={() => setIsSearchOpen(true)}
-              className="ai-input mt-6 inline-flex w-full items-center gap-3 px-4 text-left text-slate-600 hover:border-indigo-300 hover:text-slate-900"
+              className="group mt-6 inline-flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-left transition-all hover:border-indigo-300 hover:bg-white"
             >
-              <div className="ai-stat-orb h-11 w-11">
-                <Search className="h-5 w-5 text-sky-700" />
-              </div>
-              <span className="flex-1 font-medium">Cari nama produk atau SKU</span>
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg border border-sky-100 bg-sky-100/70 text-sky-700 transition-colors group-hover:bg-sky-100">
+                <Search className="h-5 w-5" />
+              </span>
+              <span className="flex-1 text-base font-medium text-slate-700">Cari nama produk atau SKU</span>
             </button>
           </section>
         </div>
@@ -269,19 +269,19 @@ export default function Sell() {
         </section>
 
         <div className="fixed bottom-[98px] left-0 right-0 z-10 px-4">
-          <div className="glass-panel-strong mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-lg px-3 py-2.5">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Total Tagihan</p>
-              <p className="ai-heading text-[1.75rem] font-bold leading-none text-slate-900">Rp {formatNumber(total)}</p>
+          <div className="glass-panel-strong mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-lg border-slate-200 bg-white px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="ai-heading text-[1.9rem] font-bold leading-none text-slate-900">Rp {formatNumber(total)}</p>
+              <p className="mt-1 text-sm font-medium text-slate-500">Total Tagihan</p>
             </div>
             <button
               onClick={handleConfirmSale}
               disabled={cart.length === 0 || total === 0 || isProcessing}
-              className="ai-button min-w-[160px] px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+              className="ai-button min-w-[160px] rounded-lg border border-emerald-600 bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isProcessing ? (
                 <span className="flex items-center gap-2">
-                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900/60 border-t-transparent"></span>
+                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/70 border-t-transparent"></span>
                   MEMPROSES...
                 </span>
               ) : (

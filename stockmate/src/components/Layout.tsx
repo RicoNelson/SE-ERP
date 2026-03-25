@@ -10,11 +10,14 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useEffect, useState } from 'react';
+import { useOwnerSaleNotifications } from '../hooks/useOwnerSaleNotifications';
 
 export default function Layout() {
   const { currentUser, userProfile, loading } = useAuth();
   const navigate = useNavigate();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+
+  useOwnerSaleNotifications(currentUser?.uid, userProfile);
 
   useEffect(() => {
     if (!loading && !currentUser) {

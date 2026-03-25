@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react';
-import { collection, query, where, orderBy, onSnapshot, Timestamp, doc, getDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, Timestamp, doc, getDoc, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { formatNumber } from '../utils/format';
-import { TrendingUp, PackageMinus, Clock, ShoppingBag, Siren, Activity, X } from 'lucide-react';
+import { formatNumber, handleFormattedInputChange, parseNumber } from '../utils/format';
+import { TrendingUp, PackageMinus, Clock, ShoppingBag, Siren, Activity, X, WalletCards, HandCoins } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 
 interface DailyStats {
   totalRevenue: number;
   totalItemsSold: number;
+  totalCogs: number;
 }
 
 interface ProductSoldStat {
@@ -42,14 +44,42 @@ interface SaleDetail {
   paymentMethod?: string;
 }
 
+interface ExpenseRecord {
+  id: string;
+  amount: number;
+  category: string;
+  note?: string;
+  spentAt: Date;
+}
+
+const EXPENSE_CATEGORIES = [
+  'Delivery Fee',
+  'Tip Driver',
+  'Parkir',
+  'Pulsa / Data',
+  'Makan Staff',
+  'Lainnya',
+];
+
 export default function Reports() {
-  const [stats, setStats] = useState<DailyStats>({ totalRevenue: 0, totalItemsSold: 0 });
+  const [stats, setStats] = useState<DailyStats>({ totalRevenue: 0, totalItemsSold: 0, totalCogs: 0 });
   const [productsSold, setProductsSold] = useState<ProductSoldStat[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
   const [lowStockCount, setLowStockCount] = useState(0);
   const [recentActivity, setRecentActivity] = useState<ActivityLog[]>([]);
   const [selectedSale, setSelectedSale] = useState<SaleDetail | null>(null);
   const [isSaleDetailLoading, setIsSaleDetailLoading] = useState(false);
+  const [expenseCategory, setExpenseCategory] = useState(EXPENSE_CATEGORIES[0]);
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseNote, setExpenseNote] = useState('');
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
   const [loading, setLoading] = useState(true);
+  const { currentUser } = useAuth();
+
+  const totalExpenses = expenses.reduce((sum, item) => sum + item.amount, 0);
+  const grossProfit = stats.totalRevenue - stats.totalCogs;
+  const netPnl = grossProfit - totalExpenses;
+  const pnlMargin = stats.totalRevenue > 0 ? (netPnl / stats.totalRevenue) * 100 : 0;
 
   const handleOpenSaleDetail = async (activity: ActivityLog) => {
     if (activity.type !== 'sale' || !activity.referenceId) return;
@@ -80,8 +110,31 @@ export default function Reports() {
     }
   };
 
+  const handleSaveExpense = async () => {
+    const amount = parseNumber(expenseAmount);
+    if (amount <= 0 || !expenseCategory || isSavingExpense) return;
+
+    setIsSavingExpense(true);
+    try {
+      await addDoc(collection(db, 'operating_expenses'), {
+        amount,
+        category: expenseCategory,
+        note: expenseNote.trim(),
+        spentAt: serverTimestamp(),
+        createdBy: currentUser?.uid || 'unknown',
+        createdAt: serverTimestamp(),
+      });
+      setExpenseAmount('');
+      setExpenseNote('');
+    } catch (error) {
+      console.error('Error saving expense:', error);
+      alert('Gagal menyimpan biaya. Silakan coba lagi.');
+    } finally {
+      setIsSavingExpense(false);
+    }
+  };
+
   useEffect(() => {
-    // 1. Fetch Today's Sales
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
 
@@ -93,36 +146,60 @@ export default function Reports() {
     const unsubSales = onSnapshot(salesQuery, (snapshot) => {
       let revenue = 0;
       let itemsSold = 0;
+      let cogs = 0;
       const productStatsMap = new Map<string, ProductSoldStat>();
 
       snapshot.forEach((doc) => {
         const data = doc.data();
         revenue += data.total || 0;
-        
-        // Sum up quantities from all items in this sale
+
         if (data.items && Array.isArray(data.items)) {
-          data.items.forEach((item: any) => {
-            itemsSold += item.quantity || 0;
-            
-            const existingStat = productStatsMap.get(item.productId) || {
-              productId: item.productId,
-              productName: item.productNameSnapshot,
+          data.items.forEach((item: { productId?: string; productNameSnapshot?: string; quantity?: number; unitPrice?: number; costPrice?: number; }) => {
+            const quantity = item.quantity || 0;
+            const unitPrice = item.unitPrice || 0;
+            const costPrice = item.costPrice || 0;
+            const productId = item.productId || 'unknown-product';
+
+            itemsSold += quantity;
+            cogs += quantity * costPrice;
+
+            const existingStat = productStatsMap.get(productId) || {
+              productId,
+              productName: item.productNameSnapshot || 'Produk',
               quantity: 0,
               revenue: 0
             };
-            
-            existingStat.quantity += item.quantity;
-            existingStat.revenue += (item.quantity * item.unitPrice);
-            productStatsMap.set(item.productId, existingStat);
+
+            existingStat.quantity += quantity;
+            existingStat.revenue += quantity * unitPrice;
+            productStatsMap.set(productId, existingStat);
           });
         }
       });
 
-      setStats({ totalRevenue: revenue, totalItemsSold: itemsSold });
+      setStats({ totalRevenue: revenue, totalItemsSold: itemsSold, totalCogs: cogs });
       setProductsSold(Array.from(productStatsMap.values()).sort((a, b) => b.quantity - a.quantity));
     });
 
-    // 2. Fetch Low Stock Count
+    const expensesQuery = query(
+      collection(db, 'operating_expenses'),
+      where('spentAt', '>=', Timestamp.fromDate(startOfToday)),
+      orderBy('spentAt', 'desc')
+    );
+    const unsubExpenses = onSnapshot(expensesQuery, (snapshot) => {
+      const todayExpenses: ExpenseRecord[] = snapshot.docs.map((docSnapshot) => {
+        const data = docSnapshot.data();
+        return {
+          id: docSnapshot.id,
+          amount: data.amount || 0,
+          category: data.category || 'Lainnya',
+          note: data.note || '',
+          spentAt: data.spentAt?.toDate?.() || new Date(),
+        };
+      });
+      setExpenses(todayExpenses);
+    });
+
     const productsQuery = query(collection(db, 'products'));
     const unsubProducts = onSnapshot(productsQuery, (snapshot) => {
       let lowCount = 0;
@@ -135,22 +212,20 @@ export default function Reports() {
       setLowStockCount(lowCount);
     });
 
-    // 3. Fetch Recent Activity (Stock Movements)
     const activityQuery = query(
       collection(db, 'stock_movements'),
       orderBy('performedAt', 'desc')
     );
-    
-    // We only want the latest ~10 activities for the dashboard
+
     const unsubActivity = onSnapshot(activityQuery, async (snapshot) => {
       const activities: ActivityLog[] = [];
       let count = 0;
-      
+
       for (const docSnapshot of snapshot.docs) {
         if (count >= 10) break;
-        
+
         const data = docSnapshot.data();
-        
+
         activities.push({
           id: docSnapshot.id,
           type: data.type,
@@ -168,6 +243,7 @@ export default function Reports() {
 
     return () => {
       unsubSales();
+      unsubExpenses();
       unsubProducts();
       unsubActivity();
     };
@@ -210,6 +286,118 @@ export default function Reports() {
           <div className="text-xl font-bold text-slate-900">
             {formatNumber(stats.totalItemsSold)}
           </div>
+        </div>
+
+        <div className="ai-card ai-card-hover stagger-fade-in p-4" style={{ animationDelay: '180ms' }}>
+          <div className="mb-4 flex items-center gap-3 text-slate-600">
+            <div className="ai-stat-orb">
+              <WalletCards className="h-4 w-4 text-emerald-300" />
+            </div>
+            <span className="text-sm font-medium">Laba Kotor</span>
+          </div>
+          <div className="text-xl font-bold text-slate-900">
+            Rp {formatNumber(grossProfit)}
+          </div>
+        </div>
+
+        <div className="ai-card ai-card-hover stagger-fade-in p-4" style={{ animationDelay: '240ms' }}>
+          <div className="mb-4 flex items-center gap-3 text-slate-600">
+            <div className="ai-stat-orb">
+              <HandCoins className="h-4 w-4 text-rose-300" />
+            </div>
+            <span className="text-sm font-medium">Margin PnL</span>
+          </div>
+          <div className={`text-xl font-bold ${netPnl >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            Rp {formatNumber(netPnl)}
+          </div>
+          <p className={`mt-1 text-xs font-semibold ${netPnl >= 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
+            {pnlMargin.toFixed(1)}%
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-6 mb-8">
+        <div className="ai-section-title">
+          <div className="flex items-center gap-3">
+            <div className="ai-stat-orb">
+              <HandCoins className="h-5 w-5 text-sky-700" />
+            </div>
+            <h3 className="font-bold text-slate-900">Biaya Operasional Hari Ini</h3>
+          </div>
+          <span className="text-sm font-semibold text-slate-500">Rp {formatNumber(totalExpenses)}</span>
+        </div>
+        <div className="ai-card p-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Kategori</label>
+              <div className="relative">
+                <select
+                  value={expenseCategory}
+                  onChange={(e) => setExpenseCategory(e.target.value)}
+                  className="ai-select w-full appearance-none py-3 pl-4 pr-10 font-medium"
+                >
+                  {EXPENSE_CATEGORIES.map((category) => (
+                    <option key={category} value={category}>{category}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Nominal</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={expenseAmount}
+                onChange={(e) => {
+                  const { formatted } = handleFormattedInputChange(e.target.value);
+                  setExpenseAmount(formatted);
+                }}
+                className="ai-input w-full py-3 px-4"
+                placeholder="Contoh: 35.000"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Catatan</label>
+              <input
+                type="text"
+                value={expenseNote}
+                onChange={(e) => setExpenseNote(e.target.value)}
+                className="ai-input w-full py-3 px-4"
+                placeholder="Opsional"
+              />
+            </div>
+          </div>
+
+          <div className="mt-3 flex justify-end">
+            <button
+              onClick={handleSaveExpense}
+              disabled={parseNumber(expenseAmount) <= 0 || isSavingExpense}
+              className="rounded-lg border border-sky-600 bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSavingExpense ? 'Menyimpan...' : 'Simpan Biaya'}
+            </button>
+          </div>
+
+          <div className="ai-divider my-4" />
+
+          {expenses.length === 0 ? (
+            <p className="text-sm text-slate-500">Belum ada biaya hari ini.</p>
+          ) : (
+            <div className="space-y-2">
+              {expenses.map((expense) => (
+                <div key={expense.id} className="flex items-center justify-between rounded-xl border border-slate-200/80 px-3 py-2.5">
+                  <div className="pr-4">
+                    <p className="text-sm font-semibold text-slate-900">{expense.category}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {expense.spentAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                      {expense.note ? ` · ${expense.note}` : ''}
+                    </p>
+                  </div>
+                  <p className="text-sm font-bold text-rose-600">- Rp {formatNumber(expense.amount)}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
