@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Search, Trash2, Edit3, ChevronDown, ShoppingBag, CreditCard } from 'lucide-react';
-import { doc, serverTimestamp, collection, runTransaction, query, where, getDocs } from 'firebase/firestore';
+import { doc, serverTimestamp, collection, runTransaction, query, where, getDocs, type DocumentReference } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Product, InventoryLayer, FifoAllocation } from '../types';
@@ -123,18 +123,50 @@ export default function Sell() {
     setIsProcessing(true);
 
     try {
+      const layerRefsByProduct = new Map<string, DocumentReference[]>();
+      for (const item of cartWithParsedQty) {
+        const productId = item.id!;
+        const layersQuery = query(
+          collection(db, 'inventory_layers'),
+          where('productId', '==', productId),
+        );
+        const layersSnapshot = await getDocs(layersQuery);
+        const sortedLayerRefs = [...layersSnapshot.docs]
+          .sort((a, b) => {
+            const aDate = (a.data().receivedAt?.toDate?.() as Date | undefined)?.getTime() || 0;
+            const bDate = (b.data().receivedAt?.toDate?.() as Date | undefined)?.getTime() || 0;
+            return aDate - bDate;
+          })
+          .map((docItem) => docItem.ref);
+        layerRefsByProduct.set(productId, sortedLayerRefs);
+      }
+
       await runTransaction(db, async (transaction) => {
         const saleRef = doc(collection(db, 'sales'));
-        let computedSaleTotal = 0;
-        const saleItems: Array<{
+        const preparedSales: Array<{
           productId: string;
-          productNameSnapshot: string;
-          quantity: number;
-          unitPrice: number;
-          originalPrice: number;
-          costPrice: number;
+          productRef: DocumentReference;
+          currentStock: number;
+          quantityToSell: number;
+          movementRef: DocumentReference;
+          totalRevenue: number;
+          avgCost: number;
           totalCost: number;
           fifoAllocations: FifoAllocation[];
+          layerUpdates: Array<{
+            ref: DocumentReference;
+            quantityRemaining: number;
+          }>;
+          saleItem: {
+            productId: string;
+            productNameSnapshot: string;
+            quantity: number;
+            unitPrice: number;
+            originalPrice: number;
+            costPrice: number;
+            totalCost: number;
+            fifoAllocations: FifoAllocation[];
+          };
         }> = [];
 
         for (const item of cartWithParsedQty) {
@@ -149,25 +181,21 @@ export default function Sell() {
 
           const productData = productSnap.data() as Product;
           const currentStock = productData.stockQty || 0;
-
-          const layersQuery = query(
-            collection(db, 'inventory_layers'),
-            where('productId', '==', productId)
-          );
-          const layersSnapshot = await getDocs(layersQuery);
-          const sortedLayerDocs = [...layersSnapshot.docs].sort((a, b) => {
-            const aDate = (a.data().receivedAt?.toDate?.() as Date | undefined)?.getTime() || 0;
-            const bDate = (b.data().receivedAt?.toDate?.() as Date | undefined)?.getTime() || 0;
-            return aDate - bDate;
-          });
+          const candidateLayerRefs = layerRefsByProduct.get(productId) || [];
 
           let remainingToAllocate = quantityToSell;
           let totalCost = 0;
           const allocations: FifoAllocation[] = [];
+          const layerUpdates: Array<{
+            ref: DocumentReference;
+            quantityRemaining: number;
+          }> = [];
 
-          for (const layerDoc of sortedLayerDocs) {
+          for (const layerRef of candidateLayerRefs) {
             if (remainingToAllocate <= 0) break;
-            const layerData = layerDoc.data() as InventoryLayer;
+            const layerSnap = await transaction.get(layerRef);
+            if (!layerSnap.exists()) continue;
+            const layerData = layerSnap.data() as InventoryLayer;
             const available = layerData.quantityRemaining || 0;
 
             if (available <= 0) continue;
@@ -175,13 +203,14 @@ export default function Sell() {
             const allocatedQty = Math.min(available, remainingToAllocate);
             const newRemaining = available - allocatedQty;
             const unitCost = layerData.unitCost || 0;
-            transaction.update(layerDoc.ref, {
+
+            layerUpdates.push({
+              ref: layerRef,
               quantityRemaining: newRemaining,
-              updatedAt: serverTimestamp(),
             });
 
             allocations.push({
-              layerId: layerDoc.id,
+              layerId: layerSnap.id,
               quantity: allocatedQty,
               unitCost,
               unitSellPrice: item.parsedUnitPrice,
@@ -203,39 +232,74 @@ export default function Sell() {
           }
 
           const totalRevenue = quantityToSell * item.parsedUnitPrice;
-          computedSaleTotal += totalRevenue;
           const avgCost = quantityToSell > 0 ? totalCost / quantityToSell : 0;
           const movementRef = doc(collection(db, 'stock_movements'));
 
-          transaction.update(productRef, {
-            stockQty: currentStock - quantityToSell,
+          preparedSales.push({
+            productId,
+            productRef,
+            currentStock,
+            quantityToSell,
+            movementRef,
+            totalRevenue,
+            avgCost,
+            totalCost,
+            fifoAllocations: allocations,
+            layerUpdates,
+            saleItem: {
+              productId,
+              productNameSnapshot: formatProductName(item.name),
+              quantity: quantityToSell,
+              unitPrice: item.parsedUnitPrice,
+              originalPrice: item.parsedUnitPrice,
+              costPrice: avgCost,
+              totalCost,
+              fifoAllocations: allocations,
+            },
+          });
+        }
+
+        let computedSaleTotal = 0;
+        const saleItems: Array<{
+          productId: string;
+          productNameSnapshot: string;
+          quantity: number;
+          unitPrice: number;
+          originalPrice: number;
+          costPrice: number;
+          totalCost: number;
+          fifoAllocations: FifoAllocation[];
+        }> = [];
+
+        for (const prepared of preparedSales) {
+          for (const layerUpdate of prepared.layerUpdates) {
+            transaction.update(layerUpdate.ref, {
+              quantityRemaining: layerUpdate.quantityRemaining,
+              updatedAt: serverTimestamp(),
+            });
+          }
+
+          transaction.update(prepared.productRef, {
+            stockQty: prepared.currentStock - prepared.quantityToSell,
             updatedAt: serverTimestamp(),
           });
 
-          transaction.set(movementRef, {
-            productId,
+          transaction.set(prepared.movementRef, {
+            productId: prepared.productId,
             type: 'sale',
-            quantityChange: -quantityToSell,
+            quantityChange: -prepared.quantityToSell,
             referenceId: saleRef.id,
             referenceType: 'sale',
             performedBy: currentUser?.uid || 'unknown',
             performedAt: serverTimestamp(),
-            fifoAllocations: allocations,
-            totalCost,
-            totalRevenue,
-            unitCost: avgCost,
+            fifoAllocations: prepared.fifoAllocations,
+            totalCost: prepared.totalCost,
+            totalRevenue: prepared.totalRevenue,
+            unitCost: prepared.avgCost,
           });
 
-          saleItems.push({
-            productId,
-            productNameSnapshot: formatProductName(item.name),
-            quantity: quantityToSell,
-            unitPrice: item.parsedUnitPrice,
-            originalPrice: item.parsedUnitPrice,
-            costPrice: avgCost,
-            totalCost,
-            fifoAllocations: allocations,
-          });
+          computedSaleTotal += prepared.totalRevenue;
+          saleItems.push(prepared.saleItem);
         }
 
         transaction.set(saleRef, {

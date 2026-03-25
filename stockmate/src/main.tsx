@@ -4,13 +4,6 @@ import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import App from './App.tsx'
 
-const updateSW = registerSW({
-  immediate: true,
-  onNeedRefresh() {
-    updateSW(true)
-  },
-})
-
 const checkServiceWorkerUpdate = async () => {
   const registration = await navigator.serviceWorker?.getRegistration()
   if (registration) {
@@ -32,8 +25,15 @@ const resetPwaCache = async () => {
   window.location.reload()
 }
 
-if ('serviceWorker' in navigator) {
-  checkServiceWorkerUpdate()
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  const updateSW = registerSW({
+    immediate: true,
+    onNeedRefresh() {
+      updateSW(true)
+    },
+  })
+
+  void checkServiceWorkerUpdate()
   window.addEventListener('focus', () => {
     void checkServiceWorkerUpdate()
   })

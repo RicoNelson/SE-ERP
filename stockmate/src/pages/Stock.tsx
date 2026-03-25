@@ -177,51 +177,43 @@ export default function Stock() {
         const previousQty = productData.stockQty || 0;
         const delta = newQty - previousQty;
         const targetLayerId = selectedLayerId;
+        let layerRef: ReturnType<typeof doc> | null = null;
+        let layerCurrentQty = 0;
+        let layerCurrentReceived = 0;
 
-        transaction.update(productRef, {
-          stockQty: newQty,
-          updatedAt: serverTimestamp(),
-        });
+        if (delta !== 0 && targetLayerId) {
+          layerRef = doc(db, 'inventory_layers', targetLayerId);
+          const layerSnap = await transaction.get(layerRef);
+          if (!layerSnap.exists()) {
+            throw new Error('Layer FIFO tidak ditemukan.');
+          }
+          const layerData = layerSnap.data();
+          layerCurrentQty = layerData.quantityRemaining || 0;
+          layerCurrentReceived = layerData.quantityReceived || 0;
+        }
 
         if (delta !== 0) {
           if (!targetLayerId) {
             throw new Error('Layer FIFO belum dipilih.');
           }
 
-          if (delta < 0) {
-            const layerRef = doc(db, 'inventory_layers', targetLayerId);
-            const layerSnap = await transaction.get(layerRef);
-            if (!layerSnap.exists()) {
-              throw new Error('Layer FIFO tidak ditemukan.');
-            }
-
-            const layerData = layerSnap.data();
-            const currentLayerQty = layerData.quantityRemaining || 0;
+          if (delta < 0 && layerRef) {
             const deduction = Math.abs(delta);
 
-            if (currentLayerQty < deduction) {
-              throw new Error(`Stok layer tidak cukup. Sisa di layer ${formatNumber(currentLayerQty)}.`);
+            if (layerCurrentQty < deduction) {
+              throw new Error(`Stok layer tidak cukup. Sisa di layer ${formatNumber(layerCurrentQty)}.`);
             }
 
             transaction.update(layerRef, {
-              quantityRemaining: currentLayerQty - deduction,
+              quantityRemaining: layerCurrentQty - deduction,
               updatedAt: serverTimestamp(),
             });
           }
 
-          if (delta > 0) {
-            const layerRef = doc(db, 'inventory_layers', targetLayerId);
-            const layerSnap = await transaction.get(layerRef);
-            if (!layerSnap.exists()) {
-              throw new Error('Layer FIFO tidak ditemukan.');
-            }
-            const layerData = layerSnap.data();
-            const currentRemaining = layerData.quantityRemaining || 0;
-            const currentReceived = layerData.quantityReceived || 0;
-
+          if (delta > 0 && layerRef) {
             transaction.update(layerRef, {
-              quantityRemaining: currentRemaining + delta,
-              quantityReceived: currentReceived + delta,
+              quantityRemaining: layerCurrentQty + delta,
+              quantityReceived: layerCurrentReceived + delta,
               updatedAt: serverTimestamp(),
             });
           }
@@ -240,6 +232,11 @@ export default function Stock() {
             note: `Stock opname dari ${formatNumber(previousQty)} ke ${formatNumber(newQty)}`,
           });
         }
+
+        transaction.update(productRef, {
+          stockQty: newQty,
+          updatedAt: serverTimestamp(),
+        });
       });
       delete productDetailCacheRef.current[editingProduct.id!];
       setEditingProduct(null);

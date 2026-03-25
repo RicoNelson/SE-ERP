@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { collection, query, where, orderBy, onSnapshot, Timestamp, doc, getDoc, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { formatNumber, formatProductName, handleFormattedInputChange, parseNumber } from '../utils/format';
@@ -87,8 +87,8 @@ interface ProductDetailEntry {
 }
 
 const EXPENSE_CATEGORIES = [
-  'Delivery Fee',
-  'Tip Driver',
+  'Biaya Kirim Barang',
+  'Tip Kurir',
   'Parkir',
   'Pulsa / Data',
   'Makan Staff',
@@ -148,7 +148,7 @@ export default function Reports() {
     ? new Date(`${singleDate}T00:00:00`).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
     : `${new Date(`${rangeStartDate}T00:00:00`).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })} - ${new Date(`${rangeEndDate}T00:00:00`).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}`;
 
-  const getFilterDateRange = () => {
+  const getFilterDateRange = useCallback(() => {
     const startDateRaw = parseDateInput(selectedStartDate);
     const endDateRaw = parseDateInput(selectedEndDate);
     if (!startDateRaw || !endDateRaw) return null;
@@ -163,7 +163,7 @@ export default function Reports() {
     endExclusive.setDate(endExclusive.getDate() + 1);
 
     return { normalizedStartDate, endExclusive };
-  };
+  }, [selectedStartDate, selectedEndDate]);
 
   const handleOpenSaleDetail = async (activity: ActivityLog) => {
     if (activity.type !== 'sale' || !activity.referenceId) return;
@@ -243,9 +243,9 @@ export default function Reports() {
       );
       const adjustmentsQuery = query(
         collection(db, 'stock_movements'),
-        where('productId', '==', product.productId),
         where('performedAt', '>=', Timestamp.fromDate(range.normalizedStartDate)),
-        where('performedAt', '<', Timestamp.fromDate(range.endExclusive))
+        where('performedAt', '<', Timestamp.fromDate(range.endExclusive)),
+        orderBy('performedAt', 'desc')
       );
 
       const [salesSnapshot, adjustmentsSnapshot] = await Promise.all([
@@ -278,6 +278,7 @@ export default function Reports() {
 
       const movementEntries: ProductDetailEntry[] = adjustmentsSnapshot.docs.flatMap((adjustmentDoc) => {
           const data = adjustmentDoc.data();
+          if (data.productId !== product.productId) return [];
           const isOpname = data.type === 'adjustment' && data.referenceType === 'stock_opname';
           const isPb = data.type === 'stock_in' && data.referenceType === 'purchase_order';
           if (!isOpname && !isPb) return [];
@@ -455,7 +456,7 @@ export default function Reports() {
       unsubProducts();
       unsubActivity();
     };
-  }, [selectedStartDate, selectedEndDate]);
+  }, [selectedStartDate, selectedEndDate, getFilterDateRange]);
 
   if (loading) {
     return <div className="p-4 text-center text-slate-500 mt-10">Memuat laporan...</div>;
