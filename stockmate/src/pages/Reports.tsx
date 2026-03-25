@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { collection, query, where, orderBy, onSnapshot, Timestamp, doc, getDoc, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { formatNumber, handleFormattedInputChange, parseNumber } from '../utils/format';
+import { formatNumber, formatProductName, handleFormattedInputChange, parseNumber } from '../utils/format';
 import { TrendingUp, PackageMinus, Clock, ShoppingBag, Siren, Activity, X, WalletCards, HandCoins } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -46,6 +46,25 @@ interface SaleDetail {
   paymentMethod?: string;
 }
 
+interface PurchaseDetailItem {
+  productId: string;
+  productNameSnapshot: string;
+  quantity: number;
+  unitCost: number;
+  sellPrice: number;
+  subtotal: number;
+}
+
+interface PurchaseDetail {
+  id: string;
+  receiptCode?: string;
+  receiptDate: Date;
+  supplierName?: string;
+  note?: string;
+  items: PurchaseDetailItem[];
+  totalAmount: number;
+}
+
 interface ExpenseRecord {
   id: string;
   amount: number;
@@ -56,13 +75,15 @@ interface ExpenseRecord {
 
 interface ProductDetailEntry {
   id: string;
-  type: 'sale' | 'adjustment';
+  type: 'sale' | 'opname' | 'pb';
   performedAt: Date;
   quantity: number;
   unitPrice?: number;
   total?: number;
   paymentMethod?: string;
   note?: string;
+  receiptCode?: string;
+  supplierName?: string;
 }
 
 const EXPENSE_CATEGORIES = [
@@ -105,6 +126,8 @@ export default function Reports() {
   const [recentActivity, setRecentActivity] = useState<ActivityLog[]>([]);
   const [selectedSale, setSelectedSale] = useState<SaleDetail | null>(null);
   const [isSaleDetailLoading, setIsSaleDetailLoading] = useState(false);
+  const [selectedPurchase, setSelectedPurchase] = useState<PurchaseDetail | null>(null);
+  const [isPurchaseDetailLoading, setIsPurchaseDetailLoading] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductSoldStat | null>(null);
   const [productDetailEntries, setProductDetailEntries] = useState<ProductDetailEntry[]>([]);
   const [isProductDetailLoading, setIsProductDetailLoading] = useState(false);
@@ -171,6 +194,38 @@ export default function Reports() {
     }
   };
 
+  const handleOpenPurchaseDetail = async (activity: ActivityLog) => {
+    const isPbActivity = activity.type === 'stock_in' && activity.referenceType === 'purchase_order';
+    if (!isPbActivity || !activity.referenceId) return;
+
+    setIsPurchaseDetailLoading(true);
+    try {
+      const purchaseRef = doc(db, 'purchases', activity.referenceId);
+      const purchaseSnapshot = await getDoc(purchaseRef);
+
+      if (!purchaseSnapshot.exists()) {
+        alert('Detail PB tidak ditemukan.');
+        return;
+      }
+
+      const purchaseData = purchaseSnapshot.data();
+      setSelectedPurchase({
+        id: purchaseSnapshot.id,
+        receiptCode: purchaseData.receiptCode || '',
+        receiptDate: purchaseData.receiptDate?.toDate?.() || activity.performedAt,
+        supplierName: purchaseData.supplierName || '',
+        note: purchaseData.note || '',
+        items: Array.isArray(purchaseData.items) ? purchaseData.items : [],
+        totalAmount: purchaseData.totalAmount || 0,
+      });
+    } catch (error) {
+      console.error('Error loading purchase detail:', error);
+      alert('Gagal memuat detail PB.');
+    } finally {
+      setIsPurchaseDetailLoading(false);
+    }
+  };
+
   const handleOpenProductDetail = async (product: ProductSoldStat) => {
     const range = getFilterDateRange();
     if (!range) return;
@@ -190,8 +245,7 @@ export default function Reports() {
         collection(db, 'stock_movements'),
         where('productId', '==', product.productId),
         where('performedAt', '>=', Timestamp.fromDate(range.normalizedStartDate)),
-        where('performedAt', '<', Timestamp.fromDate(range.endExclusive)),
-        orderBy('performedAt', 'desc')
+        where('performedAt', '<', Timestamp.fromDate(range.endExclusive))
       );
 
       const [salesSnapshot, adjustmentsSnapshot] = await Promise.all([
@@ -222,20 +276,24 @@ export default function Reports() {
         });
       });
 
-      const adjustmentEntries: ProductDetailEntry[] = adjustmentsSnapshot.docs
-        .map((adjustmentDoc) => {
+      const movementEntries: ProductDetailEntry[] = adjustmentsSnapshot.docs.flatMap((adjustmentDoc) => {
           const data = adjustmentDoc.data();
-          return {
+          const isOpname = data.type === 'adjustment' && data.referenceType === 'stock_opname';
+          const isPb = data.type === 'stock_in' && data.referenceType === 'purchase_order';
+          if (!isOpname && !isPb) return [];
+
+          return [{
             id: adjustmentDoc.id,
-            type: 'adjustment' as const,
+            type: isOpname ? 'opname' as const : 'pb' as const,
             performedAt: data.performedAt?.toDate?.() || new Date(),
             quantity: data.quantityChange || 0,
             note: data.note || '',
-          };
-        })
-        .filter((entry) => entry.type === 'adjustment');
+            receiptCode: data.receiptCode || '',
+            supplierName: data.supplierName || '',
+          }];
+        });
 
-      const merged = [...saleEntries, ...adjustmentEntries].sort(
+      const merged = [...saleEntries, ...movementEntries].sort(
         (a, b) => b.performedAt.getTime() - a.performedAt.getTime()
       );
       setProductDetailEntries(merged);
@@ -307,7 +365,7 @@ export default function Reports() {
 
             const existingStat = productStatsMap.get(productId) || {
               productId,
-              productName: item.productNameSnapshot || 'Produk',
+              productName: formatProductName(item.productNameSnapshot || 'Produk'),
               quantity: 0,
               revenue: 0
             };
@@ -349,7 +407,7 @@ export default function Reports() {
       const names: Record<string, string> = {};
       snapshot.forEach((doc) => {
         const data = doc.data();
-        names[doc.id] = data.name || 'Produk';
+        names[doc.id] = formatProductName(data.name || 'Produk');
         if (data.stockQty <= data.lowStockThreshold) {
           lowCount++;
         }
@@ -648,7 +706,7 @@ export default function Reports() {
                 >
                   <div className="flex items-center justify-between">
                   <div>
-                    <p className="font-medium leading-tight text-slate-900">{prod.productName}</p>
+                    <p className="font-medium leading-tight text-slate-900">{formatProductName(prod.productName)}</p>
                     <p className="mt-1 text-xs text-slate-400">Rp {formatNumber(prod.revenue)} · Ketuk untuk detail</p>
                   </div>
                   <div className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-1 text-lg font-bold text-slate-900">
@@ -708,6 +766,8 @@ export default function Reports() {
               {recentActivity.map((activity) => {
                 const isSale = activity.type === 'sale';
                 const canOpenSaleDetail = isSale && activity.referenceType === 'sale' && !!activity.referenceId;
+                const isPb = activity.type === 'stock_in' && activity.referenceType === 'purchase_order';
+                const canOpenPbDetail = isPb && !!activity.referenceId;
                 const productName = activity.productId ? productNameById[activity.productId] : undefined;
                 return (
                   <div key={activity.id} className="p-4 flex items-center justify-between">
@@ -719,16 +779,31 @@ export default function Reports() {
                           className="text-left"
                         >
                           <p className="font-medium text-sky-700 underline decoration-sky-200 underline-offset-2">
-                            Penjualan {productName ? `· ${productName}` : ''}
+                            Penjualan {productName ? `· ${formatProductName(productName)}` : ''}
                           </p>
                           <p className="mt-0.5 text-xs text-slate-400">
                             {activity.performedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} · Ketuk untuk detail
                           </p>
                         </button>
+                      ) : canOpenPbDetail ? (
+                        <button
+                          onClick={() => handleOpenPurchaseDetail(activity)}
+                          disabled={isPurchaseDetailLoading}
+                          className="text-left"
+                        >
+                          <p className="font-medium text-indigo-700 underline decoration-indigo-200 underline-offset-2">
+                            PB / Penambahan Stok {productName ? `· ${formatProductName(productName)}` : ''}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-400">
+                            {activity.performedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                            {activity.note ? ` · ${activity.note}` : ''}
+                            {' · Ketuk untuk detail'}
+                          </p>
+                        </button>
                       ) : (
                         <>
                           <p className="font-medium text-slate-900">
-                            {isSale ? 'Penjualan' : 'Penyesuaian Stok'} {productName ? `· ${productName}` : ''}
+                            {isSale ? 'Penjualan' : isPb ? 'PB / Penambahan Stok' : 'Penyesuaian Stok'} {productName ? `· ${formatProductName(productName)}` : ''}
                           </p>
                           <p className="mt-0.5 text-xs text-slate-400">
                             {activity.performedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
@@ -782,7 +857,7 @@ export default function Reports() {
                 <div className="space-y-3">
                   {selectedSale.items.map((item, idx) => (
                     <div key={`${selectedSale.id}-${item.productId}-${idx}`} className="rounded-xl border border-slate-200/80 p-3">
-                      <p className="font-medium text-slate-900">{item.productNameSnapshot}</p>
+                      <p className="font-medium text-slate-900">{formatProductName(item.productNameSnapshot)}</p>
                       <div className="mt-1 flex items-center justify-between text-sm">
                         <span className="text-slate-500">{formatNumber(item.quantity)} x Rp {formatNumber(item.unitPrice)}</span>
                         <span className="font-semibold text-slate-900">Rp {formatNumber(item.quantity * item.unitPrice)}</span>
@@ -803,6 +878,64 @@ export default function Reports() {
         </div>
       )}
 
+      {selectedPurchase && (
+        <div className="ai-modal-shell">
+          <div className="ai-modal-backdrop" onClick={() => setSelectedPurchase(null)} />
+          <div className="ai-modal-panel page-enter translate-y-0 scale-100">
+            <div className="flex items-center justify-between p-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Detail PB</h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {selectedPurchase.receiptDate.toLocaleString('id-ID', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </p>
+              </div>
+              <button onClick={() => setSelectedPurchase(null)} className="ai-button-ghost rounded-full p-2 text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="ai-divider" />
+            <div className="max-h-[60vh] overflow-y-auto p-4">
+              <div className="mb-4 grid grid-cols-1 gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                <p><span className="font-semibold">Ref PB:</span> {selectedPurchase.id}</p>
+                <p><span className="font-semibold">Kode Struk:</span> {selectedPurchase.receiptCode || '-'}</p>
+                <p><span className="font-semibold">Supplier:</span> {selectedPurchase.supplierName || '-'}</p>
+                <p><span className="font-semibold">Catatan:</span> {selectedPurchase.note || '-'}</p>
+              </div>
+
+              {selectedPurchase.items.length === 0 ? (
+                <p className="text-sm text-slate-500">Tidak ada item pada PB ini.</p>
+              ) : (
+                <div className="space-y-3">
+                  {selectedPurchase.items.map((item, idx) => (
+                    <div key={`${selectedPurchase.id}-${item.productId}-${idx}`} className="rounded-xl border border-slate-200/80 p-3">
+                      <p className="font-medium text-slate-900">{formatProductName(item.productNameSnapshot)}</p>
+                      <div className="mt-1 flex items-center justify-between text-sm">
+                        <span className="text-slate-500">{formatNumber(item.quantity)} x Rp {formatNumber(item.unitCost)}</span>
+                        <span className="font-semibold text-slate-900">Rp {formatNumber(item.subtotal)}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">Harga Jual Snapshot: Rp {formatNumber(item.sellPrice)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="ai-divider my-4" />
+
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-slate-700">Total PB</p>
+                <p className="text-lg font-bold text-slate-900">Rp {formatNumber(selectedPurchase.totalAmount)}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedProduct && (
         <div className="ai-modal-shell">
           <div className="ai-modal-backdrop" onClick={() => setSelectedProduct(null)} />
@@ -810,7 +943,7 @@ export default function Reports() {
             <div className="flex items-center justify-between p-4">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Detail Produk</h2>
-                <p className="mt-0.5 text-sm text-slate-600">{selectedProduct.productName}</p>
+                <p className="mt-0.5 text-sm text-slate-600">{formatProductName(selectedProduct.productName)}</p>
                 <p className="mt-0.5 text-xs text-slate-500">Periode {filterLabel}</p>
               </div>
               <button onClick={() => setSelectedProduct(null)} className="ai-button-ghost rounded-full p-2 text-slate-600">
@@ -827,12 +960,13 @@ export default function Reports() {
                 <div className="space-y-3">
                   {productDetailEntries.map((entry, idx) => {
                     const isSaleEntry = entry.type === 'sale';
+                    const isOpnameEntry = entry.type === 'opname';
                     return (
                       <div key={`${entry.id}-${idx}`} className="rounded-xl border border-slate-200/80 p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div>
-                            <p className={`text-sm font-semibold ${isSaleEntry ? 'text-sky-700' : 'text-emerald-700'}`}>
-                              {isSaleEntry ? 'Penjualan' : 'Penyesuaian Stok'}
+                            <p className={`text-sm font-semibold ${isSaleEntry ? 'text-sky-700' : isOpnameEntry ? 'text-emerald-700' : 'text-indigo-700'}`}>
+                              {isSaleEntry ? 'Penjualan' : isOpnameEntry ? 'Penyesuaian Stok (OPNAME)' : 'Penambahan Stok (PB)'}
                             </p>
                             <p className="mt-0.5 text-xs text-slate-500">
                               {entry.performedAt.toLocaleString('id-ID', {
@@ -858,6 +992,12 @@ export default function Reports() {
                         ) : (
                           <div className="mt-2 text-sm text-slate-600">
                             <p>Ref: {entry.id}</p>
+                            {entry.type === 'pb' && (
+                              <p>
+                                {entry.receiptCode ? `Struk ${entry.receiptCode}` : 'PB'}
+                                {entry.supplierName ? ` • ${entry.supplierName}` : ''}
+                              </p>
+                            )}
                             <p>{entry.note || 'Penyesuaian stok manual.'}</p>
                           </div>
                         )}

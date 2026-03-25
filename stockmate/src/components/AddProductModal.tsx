@@ -3,7 +3,7 @@ import { collection, doc, serverTimestamp, writeBatch } from 'firebase/firestore
 import { db } from '../lib/firebase';
 import { X } from 'lucide-react';
 import type { Product } from '../types';
-import { handleFormattedInputChange, parseNumber } from '../utils/format';
+import { formatProductName, handleFormattedInputChange, parseNumber } from '../utils/format';
 import { useAuth } from '../contexts/AuthContext';
 
 interface AddProductModalProps {
@@ -30,12 +30,12 @@ export default function AddProductModal({ isOpen, onClose }: AddProductModalProp
 
   useEffect(() => {
     if (isOpen) {
-      setShouldRender(true);
-      // Small delay to allow DOM to render before triggering animation
-      requestAnimationFrame(() => setIsVisible(true));
+      requestAnimationFrame(() => {
+        setShouldRender(true);
+        setIsVisible(true);
+      });
     } else {
-      setIsVisible(false);
-      // Wait for animation to finish before removing from DOM
+      requestAnimationFrame(() => setIsVisible(false));
       const timer = setTimeout(() => setShouldRender(false), 300);
       return () => clearTimeout(timer);
     }
@@ -52,7 +52,7 @@ export default function AddProductModal({ isOpen, onClose }: AddProductModalProp
       const stockQty = parseNumber(formData.stockQty);
       const costPrice = parseNumber(formData.costPrice);
       const productData: Product = {
-        name: formData.name,
+        name: formatProductName(formData.name),
         sku: formData.sku,
         sellPrice: parseNumber(formData.sellPrice),
         costPrice,
@@ -139,7 +139,7 @@ export default function AddProductModal({ isOpen, onClose }: AddProductModalProp
                 placeholder="Misal: Samsung Charger 25W"
                 className="ai-input w-full px-4 py-3"
                 value={formData.name}
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
+                onChange={(e) => setFormData({...formData, name: formatProductName(e.target.value)})}
               />
             </div>
             

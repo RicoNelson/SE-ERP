@@ -1,4 +1,4 @@
-import { handleFormattedInputChange } from '../utils/format';
+import { formatProductName, handleFormattedInputChange } from '../utils/format';
 import type { ProductFormData } from '../features/products/productForm';
 
 interface ProductFormFieldsProps {
@@ -19,7 +19,7 @@ export default function ProductFormFields({ value, onChange, idPrefix }: Product
           className="ai-input w-full px-4 py-3"
           placeholder="Misal: Samsung Charger 25W"
           value={value.name}
-          onChange={(e) => onChange({ ...value, name: e.target.value })}
+          onChange={(e) => onChange({ ...value, name: formatProductName(e.target.value) })}
         />
       </div>
 

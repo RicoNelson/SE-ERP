@@ -3,7 +3,7 @@ import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Search, ChevronLeft, Plus } from 'lucide-react';
 import type { Product } from '../types';
-import { formatNumber } from '../utils/format';
+import { formatNumber, formatProductName, normalizeSearchQuery } from '../utils/format';
 
 interface ProductSearchModalProps {
   isOpen: boolean;
@@ -21,10 +21,12 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
 
   useEffect(() => {
     if (isOpen) {
-      setShouldRender(true);
-      requestAnimationFrame(() => setIsVisible(true));
+      requestAnimationFrame(() => {
+        setShouldRender(true);
+        setIsVisible(true);
+      });
     } else {
-      setIsVisible(false);
+      requestAnimationFrame(() => setIsVisible(false));
       const timer = setTimeout(() => setShouldRender(false), 300);
       return () => clearTimeout(timer);
     }
@@ -48,9 +50,10 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
 
   if (!shouldRender) return null;
 
-  const filteredProducts = products.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    p.sku.toLowerCase().includes(searchQuery.toLowerCase())
+  const normalizedSearch = normalizeSearchQuery(searchQuery);
+  const filteredProducts = products.filter((p) =>
+    normalizeSearchQuery(p.name).includes(normalizedSearch) ||
+    normalizeSearchQuery(p.sku).includes(normalizedSearch),
   );
 
   return (
@@ -91,7 +94,7 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
             return (
               <div key={product.id} className="ai-card ai-card-hover stagger-fade-in flex items-center justify-between p-4" style={{ animationDelay: `${index * 50}ms` }}>
                 <div className="flex-1 mr-4">
-                  <h3 className="font-semibold text-slate-900">{product.name}</h3>
+                  <h3 className="font-semibold text-slate-900">{formatProductName(product.name)}</h3>
                   <div className="flex items-center gap-3 mt-1 text-sm">
                     <span className="text-slate-600">Rp {formatNumber(product.sellPrice)}</span>
                     <span className="text-slate-600">|</span>
@@ -102,8 +105,7 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
                 </div>
                 <button 
                   onClick={() => onAddProduct(product)}
-                  disabled={isOutOfStock}
-                  className="ai-button inline-flex items-center gap-1 px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                  className="ai-button inline-flex items-center gap-1 px-3 py-2 text-sm font-medium"
                 >
                   <Plus className="h-4 w-4" />
                   Tambah

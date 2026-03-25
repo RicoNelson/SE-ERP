@@ -3,7 +3,7 @@ import { collection, query, onSnapshot, orderBy, doc, serverTimestamp, runTransa
 import { db } from '../lib/firebase';
 import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles, ChevronDown, ArrowUpDown, PackagePlus } from 'lucide-react';
 import type { Product } from '../types';
-import { formatNumber, handleFormattedInputChange, parseNumber } from '../utils/format';
+import { formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -21,6 +21,7 @@ interface ProductMovement {
 
 interface ProductFifoLayer {
   id: string;
+  quantityReceived?: number;
   quantityRemaining: number;
   unitCost: number;
   sellPriceSnapshot: number;
@@ -48,14 +49,75 @@ export default function Stock() {
   // Stock Opname state
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [opnameQty, setOpnameQty] = useState('');
+  const [opnameLayers, setOpnameLayers] = useState<ProductFifoLayer[]>([]);
+  const [selectedOpnameLayerId, setSelectedOpnameLayerId] = useState('');
+  const [isOpnameLayersLoading, setIsOpnameLayersLoading] = useState(false);
   const [isOpnameProcessing, setIsOpnameProcessing] = useState(false);
   const [selectedProductDetail, setSelectedProductDetail] = useState<Product | null>(null);
   const [recentMovements, setRecentMovements] = useState<ProductMovement[]>([]);
   const [fifoLayers, setFifoLayers] = useState<ProductFifoLayer[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const productDetailCacheRef = useRef<Record<string, ProductDetailCache>>({});
-  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
-  const formatProductName = (name: string) => name.toLocaleUpperCase('id-ID');
+  const normalizedSearchQuery = normalizeSearchQuery(searchQuery);
+
+  useEffect(() => {
+    if (!editingProduct?.id) {
+      setOpnameLayers([]);
+      setSelectedOpnameLayerId('');
+      setIsOpnameLayersLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsOpnameLayersLoading(true);
+
+    (async () => {
+      try {
+        const fifoQuery = query(
+          collection(db, 'inventory_layers'),
+          where('productId', '==', editingProduct.id),
+          limit(120),
+        );
+        const fifoSnap = await getDocs(fifoQuery);
+        if (cancelled) return;
+
+        const layers: ProductFifoLayer[] = fifoSnap.docs
+          .map((item) => {
+            const data = item.data();
+            return {
+              id: item.id,
+              quantityReceived: data.quantityReceived || 0,
+              quantityRemaining: data.quantityRemaining || 0,
+              unitCost: data.unitCost || editingProduct.costPrice || 0,
+              sellPriceSnapshot: data.sellPriceSnapshot || editingProduct.sellPrice || 0,
+              sourceType: data.sourceType || 'purchase_receipt',
+              receivedAt: data.receivedAt?.toDate?.() || null,
+            };
+          })
+          .sort((a, b) => {
+            const aTime = a.receivedAt ? a.receivedAt.getTime() : 0;
+            const bTime = b.receivedAt ? b.receivedAt.getTime() : 0;
+            return aTime - bTime;
+          });
+
+        setOpnameLayers(layers);
+        const oldestActiveLayer = layers.find((item) => item.quantityRemaining > 0);
+        setSelectedOpnameLayerId(oldestActiveLayer?.id || '');
+      } catch (error) {
+        console.error('Error loading opname FIFO layers:', error);
+        setOpnameLayers([]);
+        setSelectedOpnameLayerId('');
+      } finally {
+        if (!cancelled) {
+          setIsOpnameLayersLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [editingProduct?.id, editingProduct?.costPrice, editingProduct?.sellPrice]);
 
   useEffect(() => {
     // Real-time listener for products
@@ -77,8 +139,8 @@ export default function Stock() {
 
   const filteredProducts = products
     .filter((p) => {
-      const nameKey = (p.name || '').toLowerCase();
-      const skuKey = (p.sku || '').toLowerCase();
+      const nameKey = normalizeSearchQuery(p.name);
+      const skuKey = normalizeSearchQuery(p.sku);
       const matchesSearch = nameKey.includes(normalizedSearchQuery) || skuKey.includes(normalizedSearchQuery);
       const matchesLowStock = filterLowStock ? p.stockQty <= p.lowStockThreshold : true;
       return matchesSearch && matchesLowStock;
@@ -98,6 +160,12 @@ export default function Stock() {
     setIsOpnameProcessing(true);
     try {
       const newQty = parseNumber(opnameQty);
+      const selectedLayerId = selectedOpnameLayerId;
+
+      if (!selectedOpnameLayerId) {
+        throw new Error('Pilih layer FIFO untuk opname.');
+      }
+
       await runTransaction(db, async (transaction) => {
         const productRef = doc(db, 'products', editingProduct.id!);
         const productSnap = await transaction.get(productRef);
@@ -108,6 +176,7 @@ export default function Stock() {
         const productData = productSnap.data() as Product;
         const previousQty = productData.stockQty || 0;
         const delta = newQty - previousQty;
+        const targetLayerId = selectedLayerId;
 
         transaction.update(productRef, {
           stockQty: newQty,
@@ -115,6 +184,48 @@ export default function Stock() {
         });
 
         if (delta !== 0) {
+          if (!targetLayerId) {
+            throw new Error('Layer FIFO belum dipilih.');
+          }
+
+          if (delta < 0) {
+            const layerRef = doc(db, 'inventory_layers', targetLayerId);
+            const layerSnap = await transaction.get(layerRef);
+            if (!layerSnap.exists()) {
+              throw new Error('Layer FIFO tidak ditemukan.');
+            }
+
+            const layerData = layerSnap.data();
+            const currentLayerQty = layerData.quantityRemaining || 0;
+            const deduction = Math.abs(delta);
+
+            if (currentLayerQty < deduction) {
+              throw new Error(`Stok layer tidak cukup. Sisa di layer ${formatNumber(currentLayerQty)}.`);
+            }
+
+            transaction.update(layerRef, {
+              quantityRemaining: currentLayerQty - deduction,
+              updatedAt: serverTimestamp(),
+            });
+          }
+
+          if (delta > 0) {
+            const layerRef = doc(db, 'inventory_layers', targetLayerId);
+            const layerSnap = await transaction.get(layerRef);
+            if (!layerSnap.exists()) {
+              throw new Error('Layer FIFO tidak ditemukan.');
+            }
+            const layerData = layerSnap.data();
+            const currentRemaining = layerData.quantityRemaining || 0;
+            const currentReceived = layerData.quantityReceived || 0;
+
+            transaction.update(layerRef, {
+              quantityRemaining: currentRemaining + delta,
+              quantityReceived: currentReceived + delta,
+              updatedAt: serverTimestamp(),
+            });
+          }
+
           const movementRef = doc(collection(db, 'stock_movements'));
           transaction.set(movementRef, {
             productId: editingProduct.id,
@@ -124,15 +235,20 @@ export default function Stock() {
             referenceType: 'stock_opname',
             performedBy: currentUser?.uid || 'unknown',
             performedAt: serverTimestamp(),
+            layerId: targetLayerId || null,
+            adjustmentSource: 'existing_layer',
             note: `Stock opname dari ${formatNumber(previousQty)} ke ${formatNumber(newQty)}`,
           });
         }
       });
+      delete productDetailCacheRef.current[editingProduct.id!];
       setEditingProduct(null);
       setOpnameQty('');
+      setSelectedOpnameLayerId('');
     } catch (error) {
       console.error("Error updating stock:", error);
-      alert("Gagal melakukan stock opname");
+      const message = error instanceof Error ? error.message : 'Gagal melakukan stock opname';
+      alert(message);
     } finally {
       setIsOpnameProcessing(false);
     }
@@ -438,7 +554,43 @@ export default function Stock() {
                     setOpnameQty(formatted);
                   }}
                 />
+                <p className="mt-2 text-xs text-slate-500">
+                  Perubahan: {parseNumber(opnameQty) - (editingProduct.stockQty || 0) > 0 ? '+' : ''}{formatNumber(parseNumber(opnameQty) - (editingProduct.stockQty || 0))}
+                </p>
               </div>
+
+              <div className="mb-4">
+                <label className="mb-2 block text-sm font-medium text-slate-700">Layer FIFO untuk Penyesuaian</label>
+                {isOpnameLayersLoading ? (
+                  <p className="text-sm text-slate-500">Memuat layer FIFO...</p>
+                ) : (
+                  <>
+                    <select
+                      value={selectedOpnameLayerId}
+                      onChange={(e) => setSelectedOpnameLayerId(e.target.value)}
+                      className="ai-select w-full appearance-none py-3 px-4 text-sm"
+                    >
+                      {opnameLayers.map((layer) => (
+                        <option key={layer.id} value={layer.id}>
+                          {layer.sourceType === 'initial_stock' ? 'Stok Awal' : layer.sourceType === 'stock_opname' ? 'Opname' : 'PB'}
+                          {' · '}Sisa {formatNumber(layer.quantityRemaining)}
+                          {' · '}Modal Rp {formatNumber(layer.unitCost)}
+                          {layer.receivedAt ? ` · ${layer.receivedAt.toLocaleDateString('id-ID')}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Penyesuaian stok hanya menggunakan layer FIFO yang sudah ada.
+                    </p>
+                  </>
+                )}
+              </div>
+
+              {parseNumber(opnameQty) - (editingProduct.stockQty || 0) < 0 && selectedOpnameLayerId && (
+                <p className="mb-4 text-xs text-slate-500">
+                  Pastikan layer dipilih punya sisa cukup untuk dikurangi.
+                </p>
+              )}
               
               <button
                 onClick={handleStockOpname}

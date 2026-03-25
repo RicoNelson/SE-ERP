@@ -11,6 +11,7 @@ import {
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore';
+import { FirebaseError } from 'firebase/app';
 import { ArrowLeft, PackagePlus, Plus, Trash2 } from 'lucide-react';
 import { db } from '../lib/firebase';
 import type { Product } from '../types';
@@ -24,7 +25,7 @@ import {
   validateProductForm,
   type ProductFormData,
 } from '../features/products/productForm';
-import { formatNumber, handleFormattedInputChange, parseNumber } from '../utils/format';
+import { formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
 
 type StockAddTab = 'product' | 'pb';
 
@@ -123,26 +124,27 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
   const debouncedQuery = useDebouncedValue(row.productNameInput, 280);
 
   const suggestions = useMemo(() => {
-    const queryText = debouncedQuery.trim().toLowerCase();
+    const queryText = normalizeSearchQuery(debouncedQuery);
     if (!queryText) return products.slice(0, 8);
     return products
-      .filter((item) => item.name.toLowerCase().includes(queryText) || item.sku.toLowerCase().includes(queryText))
+      .filter((item) => normalizeSearchQuery(item.name).includes(queryText) || normalizeSearchQuery(item.sku).includes(queryText))
       .slice(0, 8);
   }, [debouncedQuery, products]);
 
   const selectedProduct = products.find((item) => item.id === row.selectedProductId) || null;
   const queryHasNoMatch = debouncedQuery.trim().length > 0 && suggestions.length === 0;
+  const isInlineMode = row.inlineProductEnabled;
 
   const handleSelectProduct = (product: Product) => {
     onChange(row.id, {
       selectedProductId: product.id || null,
-      productNameInput: product.name,
+      productNameInput: formatProductName(product.name),
       inlineProductEnabled: false,
       sellPrice: formatNumber(product.sellPrice),
       buyPrice: row.buyPrice || formatNumber(product.costPrice),
       inlineProductForm: {
         ...DEFAULT_PRODUCT_FORM,
-        name: product.name,
+        name: formatProductName(product.name),
         sku: product.sku,
         sellPrice: formatNumber(product.sellPrice),
         costPrice: formatNumber(product.costPrice),
@@ -165,141 +167,171 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
         </button>
       </div>
 
-      <div className="relative">
-        <label className="mb-1 block text-sm font-medium text-slate-700">Nama Produk *</label>
-        <input
-          type="text"
-          className="ai-input w-full px-4 py-3"
-          placeholder="Cari produk..."
-          value={row.productNameInput}
-          onFocus={() => setIsFocusOpen(true)}
-          onBlur={() => {
-            window.setTimeout(() => setIsFocusOpen(false), 120);
-          }}
-          onChange={(e) =>
-            onChange(row.id, {
-              productNameInput: e.target.value,
-              selectedProductId: null,
-            })
-          }
-        />
-        {isFocusOpen && (
-          <div className="absolute z-10 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
-            {suggestions.map((product) => (
-              <button
-                key={product.id}
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => handleSelectProduct(product)}
-                className="w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-sky-50"
-              >
-                <p className="font-medium text-slate-900">{product.name}</p>
-                <p className="text-xs text-slate-500">
-                  SKU: {product.sku || '-'} • Stok tersisa: {formatNumber(product.stockQty)}
-                </p>
-              </button>
-            ))}
-            {queryHasNoMatch && (
-              <button
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() =>
-                  onChange(row.id, {
-                    inlineProductEnabled: true,
-                    selectedProductId: null,
-                    inlineProductForm: {
-                      ...row.inlineProductForm,
-                      name: row.productNameInput.trim(),
-                      costPrice: row.buyPrice,
-                      sellPrice: row.sellPrice,
-                    },
-                  })
-                }
-                className="w-full rounded-xl border border-dashed border-sky-300 bg-sky-50 px-3 py-2 text-left text-sm font-medium text-sky-700"
-              >
-                + Tambah produk baru "{row.productNameInput.trim()}"
-              </button>
+      {!isInlineMode ? (
+        <>
+          <div className="relative">
+            <label className="mb-1 block text-sm font-medium text-slate-700">Nama Produk *</label>
+            <input
+              type="text"
+              className="ai-input w-full px-4 py-3"
+              placeholder="Cari produk..."
+              value={row.productNameInput}
+              onFocus={() => setIsFocusOpen(true)}
+              onBlur={() => {
+                window.setTimeout(() => setIsFocusOpen(false), 120);
+              }}
+              onChange={(e) =>
+                onChange(row.id, {
+                  productNameInput: formatProductName(e.target.value),
+                  selectedProductId: null,
+                })
+              }
+            />
+            {isFocusOpen && (
+              <div className="absolute z-10 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
+                {suggestions.map((product) => (
+                  <button
+                    key={product.id}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleSelectProduct(product)}
+                    className="w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-sky-50"
+                  >
+                    <p className="font-medium text-slate-900">{formatProductName(product.name)}</p>
+                    <p className="text-xs text-slate-500">
+                      SKU: {product.sku || '-'} • Stok tersisa: {formatNumber(product.stockQty)}
+                    </p>
+                  </button>
+                ))}
+                {queryHasNoMatch && (
+                  <button
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() =>
+                      onChange(row.id, {
+                        inlineProductEnabled: true,
+                        selectedProductId: null,
+                        inlineProductForm: {
+                          ...row.inlineProductForm,
+                          name: formatProductName(row.productNameInput),
+                          costPrice: row.buyPrice,
+                          sellPrice: row.sellPrice,
+                          stockQty: '0',
+                        },
+                      })
+                    }
+                    className="w-full rounded-xl border border-dashed border-sky-300 bg-sky-50 px-3 py-2 text-left text-sm font-medium text-sky-700"
+                  >
+                    + Tambah produk baru "{formatProductName(row.productNameInput)}"
+                  </button>
+                )}
+              </div>
             )}
           </div>
-        )}
-      </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">Jumlah *</label>
-          <input
-            type="text"
-            inputMode="numeric"
-            className="ai-input w-full px-4 py-3"
-            value={row.qty}
-            onChange={(e) => {
-              const { formatted } = handleFormattedInputChange(e.target.value);
-              onChange(row.id, { qty: formatted });
-            }}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">Harga Beli *</label>
-          <input
-            type="text"
-            inputMode="numeric"
-            className="ai-input w-full px-4 py-3"
-            value={row.buyPrice}
-            onChange={(e) => {
-              const { formatted } = handleFormattedInputChange(e.target.value);
-              onChange(row.id, {
-                buyPrice: formatted,
-                inlineProductForm: { ...row.inlineProductForm, costPrice: formatted },
-              });
-            }}
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">Harga Jual *</label>
-          <input
-            type="text"
-            inputMode="numeric"
-            className="ai-input w-full px-4 py-3"
-            value={row.sellPrice}
-            onChange={(e) => {
-              const { formatted } = handleFormattedInputChange(e.target.value);
-              onChange(row.id, {
-                sellPrice: formatted,
-                inlineProductForm: { ...row.inlineProductForm, sellPrice: formatted },
-              });
-            }}
-          />
-        </div>
-      </div>
-
-      {selectedProduct && (
-        <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-          Produk dipilih: {selectedProduct.name} • Stok tersisa: {formatNumber(selectedProduct.stockQty)}
-        </p>
-      )}
-
-      {row.inlineProductEnabled && (
+          <div className="grid gap-4 md:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Jumlah *</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                className="ai-input w-full px-4 py-3"
+                value={row.qty}
+                onChange={(e) => {
+                  const { formatted } = handleFormattedInputChange(e.target.value);
+                  onChange(row.id, { qty: formatted });
+                }}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Harga Beli *</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                className="ai-input w-full px-4 py-3"
+                value={row.buyPrice}
+                onChange={(e) => {
+                  const { formatted } = handleFormattedInputChange(e.target.value);
+                  onChange(row.id, {
+                    buyPrice: formatted,
+                    inlineProductForm: { ...row.inlineProductForm, costPrice: formatted },
+                  });
+                }}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">Harga Jual *</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                className="ai-input w-full px-4 py-3"
+                value={row.sellPrice}
+                onChange={(e) => {
+                  const { formatted } = handleFormattedInputChange(e.target.value);
+                  onChange(row.id, {
+                    sellPrice: formatted,
+                    inlineProductForm: { ...row.inlineProductForm, sellPrice: formatted },
+                  });
+                }}
+              />
+            </div>
+          </div>
+        </>
+      ) : (
         <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-slate-900">Tambah Produk Baru (Inline)</p>
+            <p className="text-sm font-semibold text-slate-900">Tambah Produk Baru</p>
             <button
               type="button"
-              onClick={() => onChange(row.id, { inlineProductEnabled: false })}
+              onClick={() =>
+                onChange(row.id, {
+                  inlineProductEnabled: false,
+                  productNameInput: formatProductName(row.inlineProductForm.name),
+                })
+              }
               className="text-xs font-medium text-slate-600 hover:text-slate-800"
             >
-              Tutup
+              Gunakan Produk Existing
             </button>
           </div>
           <ProductFormFields
             value={row.inlineProductForm}
-            onChange={(next) => onChange(row.id, { inlineProductForm: next })}
+            onChange={(next) =>
+              // Stok awal produk inline PB selalu 0; penambahan stok berasal dari jumlah PB di baris ini.
+              onChange(row.id, {
+                inlineProductForm: { ...next, stockQty: '0' },
+                productNameInput: formatProductName(next.name),
+                buyPrice: next.costPrice,
+                sellPrice: next.sellPrice,
+              })
+            }
             idPrefix={`po-inline-${row.id}`}
           />
+          <div className="mt-4">
+            <label className="mb-1 block text-sm font-medium text-slate-700">Jumlah PB *</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              className="ai-input w-full px-4 py-3"
+              value={row.qty}
+              onChange={(e) => {
+                const { formatted } = handleFormattedInputChange(e.target.value);
+                onChange(row.id, { qty: formatted });
+              }}
+            />
+          </div>
           <p className="mt-3 text-xs text-slate-500">
             Catatan: Stok awal produk baru akan diatur 0, lalu stok ditambah lewat baris PB ini saat disimpan.
           </p>
         </div>
       )}
+
+      {selectedProduct && (
+        <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+          Produk dipilih: {formatProductName(selectedProduct.name)} • Stok tersisa: {formatNumber(selectedProduct.stockQty)}
+        </p>
+      )}
+
     </div>
   );
 }
@@ -410,7 +442,7 @@ export default function StockAdd() {
       rows: [{
         ...prev.rows[0],
         selectedProductId: found.id || null,
-        productNameInput: found.name,
+        productNameInput: formatProductName(found.name),
         buyPrice: formatNumber(found.costPrice),
         sellPrice: formatNumber(found.sellPrice),
       }],
@@ -553,8 +585,8 @@ export default function StockAdd() {
 
     for (const row of poDraft.rows) {
       const qty = parseNumber(row.qty);
-      const buyPrice = parseNumber(row.buyPrice);
-      const sellPrice = parseNumber(row.sellPrice);
+      const buyPrice = parseNumber(row.inlineProductEnabled ? row.inlineProductForm.costPrice : row.buyPrice);
+      const sellPrice = parseNumber(row.inlineProductEnabled ? row.inlineProductForm.sellPrice : row.sellPrice);
 
       if (qty <= 0) {
         alert('Jumlah item PB harus lebih dari 0.');
@@ -614,22 +646,34 @@ export default function StockAdd() {
         }> = [];
 
         const productStockCache = new Map<string, number>();
+        const preparedRows: Array<{
+          quantity: number;
+          unitCost: number;
+          sellPrice: number;
+          productId: string;
+          productName: string;
+          productRef: DocumentReference;
+          createProductPayload: ReturnType<typeof toProductDocument> | null;
+          nameKeyRef: DocumentReference | null;
+        }> = [];
 
         for (const row of poDraft.rows) {
           const quantity = parseNumber(row.qty);
-          const unitCost = parseNumber(row.buyPrice);
-          const sellPrice = parseNumber(row.sellPrice);
+          const unitCost = parseNumber(row.inlineProductEnabled ? row.inlineProductForm.costPrice : row.buyPrice);
+          const sellPrice = parseNumber(row.inlineProductEnabled ? row.inlineProductForm.sellPrice : row.sellPrice);
 
           let productId = row.selectedProductId || '';
           let productName = row.productNameInput.trim();
           let productRef: DocumentReference;
+          let createProductPayload: ReturnType<typeof toProductDocument> | null = null;
+          let nameKeyRef: DocumentReference | null = null;
 
           if (row.inlineProductEnabled) {
             const normalized = normalizeProductForm({
               ...row.inlineProductForm,
               stockQty: '0',
             });
-            const nameKeyRef = doc(db, 'product_name_keys', normalized.nameKey);
+            nameKeyRef = doc(db, 'product_name_keys', normalized.nameKey);
             const existingName = await transaction.get(nameKeyRef);
 
             if (existingName.exists()) {
@@ -639,14 +683,9 @@ export default function StockAdd() {
               productRef = doc(collection(db, 'products'));
               productId = productRef.id;
               productName = normalized.name;
-              transaction.set(productRef, toProductDocument({
+              createProductPayload = toProductDocument({
                 ...normalized,
                 stockQty: 0,
-              }));
-              transaction.set(nameKeyRef, {
-                productId,
-                name: normalized.name,
-                createdAt: serverTimestamp(),
               });
               productStockCache.set(productId, 0);
             }
@@ -662,8 +701,43 @@ export default function StockAdd() {
             const productData = productSnap.data() as Product;
             productStockCache.set(productId, productData.stockQty || 0);
             if (!productName) {
-              productName = productData.name;
+              productName = formatProductName(productData.name);
             }
+          }
+
+          preparedRows.push({
+            quantity,
+            unitCost,
+            sellPrice,
+            productId,
+            productName,
+            productRef,
+            createProductPayload,
+            nameKeyRef,
+          });
+        }
+
+        for (const row of preparedRows) {
+          const {
+            quantity,
+            unitCost,
+            sellPrice,
+            productId,
+            productName,
+            productRef,
+            createProductPayload,
+            nameKeyRef,
+          } = row;
+
+          if (createProductPayload) {
+            transaction.set(productRef, createProductPayload);
+          }
+          if (createProductPayload && nameKeyRef) {
+            transaction.set(nameKeyRef, {
+              productId,
+              name: productName,
+              createdAt: serverTimestamp(),
+            });
           }
 
           const nextStock = (productStockCache.get(productId) || 0) + quantity;
@@ -705,7 +779,7 @@ export default function StockAdd() {
           transaction.set(purchaseItemRef, {
             purchaseId: purchaseRef.id,
             productId,
-            productNameSnapshot: productName,
+            productNameSnapshot: formatProductName(productName),
             quantity,
             unitCost,
             sellPrice,
@@ -722,7 +796,7 @@ export default function StockAdd() {
 
           items.push({
             productId,
-            productNameSnapshot: productName,
+            productNameSnapshot: formatProductName(productName),
             quantity,
             unitCost,
             sellPrice,
@@ -773,7 +847,13 @@ export default function StockAdd() {
       navigate('/stock');
     } catch (error) {
       console.error(error);
-      alert('Gagal menyimpan Pembelian Barang.');
+      if (error instanceof FirebaseError) {
+        alert(`Gagal menyimpan Pembelian Barang (${error.code}). ${error.message}`);
+      } else if (error instanceof Error) {
+        alert(`Gagal menyimpan Pembelian Barang. ${error.message}`);
+      } else {
+        alert('Gagal menyimpan Pembelian Barang.');
+      }
     } finally {
       setIsSavingPo(false);
     }

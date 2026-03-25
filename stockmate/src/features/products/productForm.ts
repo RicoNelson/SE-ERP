@@ -1,6 +1,6 @@
 import { serverTimestamp } from 'firebase/firestore';
 import type { Product } from '../../types';
-import { parseNumber } from '../../utils/format';
+import { formatProductName, normalizeSearchQuery, parseNumber } from '../../utils/format';
 
 export interface ProductFormData {
   name: string;
@@ -31,10 +31,10 @@ export const DEFAULT_PRODUCT_FORM: ProductFormData = {
 };
 
 export const toNameKey = (name: string): string =>
-  name.trim().toLowerCase().replace(/\s+/g, ' ');
+  normalizeSearchQuery(name);
 
 export const normalizeProductForm = (form: ProductFormData): NormalizedProductInput => ({
-  name: form.name.trim(),
+  name: formatProductName(form.name),
   nameKey: toNameKey(form.name),
   sku: form.sku.trim(),
   sellPrice: parseNumber(form.sellPrice),

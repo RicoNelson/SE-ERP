@@ -37,3 +37,13 @@ export const handleFormattedInputChange = (inputValue: string): { formatted: str
   
   return { formatted, raw };
 };
+
+export const formatProductName = (name: string | undefined | null): string => {
+  if (!name) return '';
+  return name.trim().replace(/\s+/g, ' ').toLocaleUpperCase('id-ID');
+};
+
+export const normalizeSearchQuery = (value: string | undefined | null): string => {
+  if (!value) return '';
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('id-ID');
+};

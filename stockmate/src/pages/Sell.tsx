@@ -4,7 +4,7 @@ import { doc, serverTimestamp, collection, runTransaction, query, where, getDocs
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Product, InventoryLayer, FifoAllocation } from '../types';
-import { formatNumber, handleFormattedInputChange, parseNumber } from '../utils/format';
+import { formatNumber, formatProductName, handleFormattedInputChange, parseNumber } from '../utils/format';
 import ProductSearchModal from '../components/ProductSearchModal';
 
 interface CartItem extends Product {
@@ -91,7 +91,10 @@ export default function Sell() {
     } else {
       const defaultSellPrice = await getOldestLayerSellPrice(product.id!, product.sellPrice);
       // Add new to cart
-      setCart([...cart, { ...product, cartQuantity: '1', cartPrice: formatNumber(defaultSellPrice) }]);
+      setCart([
+        ...cart,
+        { ...product, name: formatProductName(product.name), cartQuantity: '1', cartPrice: formatNumber(defaultSellPrice) },
+      ]);
     }
     setIsSearchOpen(false);
   };
@@ -141,7 +144,7 @@ export default function Sell() {
           const productSnap = await transaction.get(productRef);
 
           if (!productSnap.exists()) {
-            throw new Error(`Produk ${item.name} tidak ditemukan.`);
+            throw new Error(`Produk ${formatProductName(item.name)} tidak ditemukan.`);
           }
 
           const productData = productSnap.data() as Product;
@@ -225,7 +228,7 @@ export default function Sell() {
 
           saleItems.push({
             productId,
-            productNameSnapshot: item.name,
+            productNameSnapshot: formatProductName(item.name),
             quantity: quantityToSell,
             unitPrice: item.parsedUnitPrice,
             originalPrice: item.parsedUnitPrice,
@@ -321,12 +324,12 @@ export default function Sell() {
                           Stok {formatNumber(item.stockQty)}
                         </span>
                       </div>
-                      <h3 className="truncate text-lg font-bold leading-tight text-slate-900">{item.name}</h3>
+                      <h3 className="truncate text-lg font-bold leading-tight text-slate-900">{formatProductName(item.name)}</h3>
                     </div>
                     <button 
                       onClick={() => removeFromCart(item.id!)}
                       className="ai-button-ghost shrink-0 rounded-xl p-2.5 text-rose-500 hover:text-rose-600"
-                      aria-label={`Hapus ${item.name}`}
+                      aria-label={`Hapus ${formatProductName(item.name)}`}
                     >
                       <Trash2 className="h-5 w-5" />
                     </button>
