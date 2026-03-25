@@ -176,7 +176,7 @@ export default function Reports() {
           {productsSold.length === 0 ? (
             <div className="p-6 text-center text-sm text-slate-400">Belum ada produk terjual hari ini</div>
           ) : (
-            <div className="divide-y divide-slate-200">
+            <div className="divide-y divide-white/6">
               {productsSold.map((prod, index) => (
                 <div key={prod.productId} className="p-4 flex items-center justify-between">
                   <div>
@@ -235,7 +235,7 @@ export default function Reports() {
           {recentActivity.length === 0 ? (
             <div className="p-6 text-center text-sm text-slate-400">Belum ada aktivitas hari ini</div>
           ) : (
-            <div className="divide-y divide-slate-200">
+            <div className="divide-y divide-white/6">
               {recentActivity.map((activity) => {
                 const isSale = activity.type === 'sale';
                 return (

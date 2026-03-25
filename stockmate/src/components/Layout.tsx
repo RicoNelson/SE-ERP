@@ -67,10 +67,10 @@ export default function Layout() {
 
   return (
     <div className="ai-shell flex min-h-screen flex-col">
-      <header className="sticky top-0 z-20 border-b border-slate-200 bg-[#f3f4f6]/95 px-4 pb-3 pt-safe backdrop-blur">
-        <div className="glass-panel-strong mx-auto mt-2 flex max-w-6xl items-center justify-between rounded-xl px-4 py-3">
+      <header className="sticky top-0 z-20 border-b border-sky-200/60 bg-white/70 px-4 pb-4 pt-safe backdrop-blur-xl">
+        <div className="glass-panel-strong mx-auto mt-3 flex max-w-6xl items-center justify-between rounded-[1.75rem] px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-700">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-sky-300/35 bg-sky-100 text-sky-700 shadow-[0_16px_30px_rgba(104,160,255,0.14)]">
               <Package className="h-5 w-5" />
             </div>
             <div>
@@ -104,7 +104,7 @@ export default function Layout() {
       </main>
 
       <nav className="fixed bottom-0 z-20 w-full px-4 pb-safe">
-        <div className="glass-panel-strong mx-auto mb-3 flex h-[74px] max-w-6xl items-center justify-around rounded-xl px-2">
+        <div className="glass-panel-strong mx-auto mb-3 flex h-[78px] max-w-6xl items-center justify-around rounded-[1.9rem] px-2">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
@@ -120,7 +120,7 @@ export default function Layout() {
                   <div
                     className={`flex h-10 w-10 items-center justify-center rounded-2xl border transition-all duration-300 ${
                       isActive
-                        ? 'border-indigo-200 bg-indigo-50 -translate-y-0.5'
+                        ? 'border-sky-300/40 bg-sky-100 shadow-[0_14px_28px_rgba(104,160,255,0.14)] -translate-y-0.5'
                         : 'border-transparent bg-white/0 group-hover:bg-sky-50 group-hover:-translate-y-0.5'
                     }`}
                   >

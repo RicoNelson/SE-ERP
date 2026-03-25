@@ -147,11 +147,11 @@ export default function Sell() {
             <p className="max-w-lg text-sm leading-6 text-slate-600">
               Tambah produk, atur jumlah, lalu konfirmasi pembayaran tanpa gangguan visual.
             </p>
-            <button
+            <button 
               onClick={() => setIsSearchOpen(true)}
-              className="ai-input mt-6 inline-flex w-full items-center gap-3 px-4 text-left text-slate-600 hover:border-indigo-300 hover:text-slate-900"
+              className="ai-input mt-5 inline-flex w-full items-center gap-3 px-4 py-4 text-left text-slate-600 hover:border-sky-300/30 hover:text-slate-900"
             >
-              <div className="ai-stat-orb h-11 w-11">
+              <div className="ai-stat-orb h-11 w-11 rounded-2xl">
                 <Search className="h-5 w-5 text-sky-700" />
               </div>
               <span className="flex-1 font-medium">Cari nama produk atau SKU</span>
@@ -239,7 +239,7 @@ export default function Sell() {
         <section className="mt-4">
           <div className="ai-card p-4">
             <div className="mb-3 flex items-center gap-3">
-              <div className="ai-stat-orb h-11 w-11">
+              <div className="ai-stat-orb h-11 w-11 rounded-2xl">
                 <CreditCard className="h-5 w-5 text-sky-700" />
               </div>
               <div>
@@ -269,7 +269,7 @@ export default function Sell() {
         </section>
 
         <div className="fixed bottom-[78px] left-0 right-0 z-10 px-4">
-          <div className="glass-panel-strong mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-xl p-3.5">
+          <div className="glass-panel-strong mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-[1.25rem] p-3.5">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Total Tagihan</p>
               <p className="ai-heading text-2xl font-black text-slate-900">Rp {formatNumber(total)}</p>
