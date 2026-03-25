@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
-import { collection, query, where, orderBy, onSnapshot, Timestamp } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, Timestamp, doc, getDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { formatNumber } from '../utils/format';
-import { TrendingUp, PackageMinus, Clock, ShoppingBag, Siren, Activity } from 'lucide-react';
+import { TrendingUp, PackageMinus, Clock, ShoppingBag, Siren, Activity, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 interface DailyStats {
@@ -23,6 +23,23 @@ interface ActivityLog {
   quantityChange: number;
   productName?: string;
   performedAt: Date;
+  referenceId?: string;
+  referenceType?: string;
+}
+
+interface SaleDetailItem {
+  productId: string;
+  productNameSnapshot: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+interface SaleDetail {
+  id: string;
+  items: SaleDetailItem[];
+  total: number;
+  soldAt: Date;
+  paymentMethod?: string;
 }
 
 export default function Reports() {
@@ -30,7 +47,38 @@ export default function Reports() {
   const [productsSold, setProductsSold] = useState<ProductSoldStat[]>([]);
   const [lowStockCount, setLowStockCount] = useState(0);
   const [recentActivity, setRecentActivity] = useState<ActivityLog[]>([]);
+  const [selectedSale, setSelectedSale] = useState<SaleDetail | null>(null);
+  const [isSaleDetailLoading, setIsSaleDetailLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const handleOpenSaleDetail = async (activity: ActivityLog) => {
+    if (activity.type !== 'sale' || !activity.referenceId) return;
+
+    setIsSaleDetailLoading(true);
+    try {
+      const saleRef = doc(db, 'sales', activity.referenceId);
+      const saleSnapshot = await getDoc(saleRef);
+
+      if (!saleSnapshot.exists()) {
+        alert('Detail penjualan tidak ditemukan.');
+        return;
+      }
+
+      const saleData = saleSnapshot.data();
+      setSelectedSale({
+        id: saleSnapshot.id,
+        items: Array.isArray(saleData.items) ? saleData.items : [],
+        total: saleData.total || 0,
+        soldAt: saleData.soldAt?.toDate?.() || activity.performedAt,
+        paymentMethod: saleData.paymentMethod || 'Tidak diketahui',
+      });
+    } catch (error) {
+      console.error('Error loading sale detail:', error);
+      alert('Gagal memuat detail penjualan.');
+    } finally {
+      setIsSaleDetailLoading(false);
+    }
+  };
 
   useEffect(() => {
     // 1. Fetch Today's Sales
@@ -107,6 +155,8 @@ export default function Reports() {
           id: docSnapshot.id,
           type: data.type,
           quantityChange: data.quantityChange,
+          referenceId: data.referenceId,
+          referenceType: data.referenceType,
           performedAt: data.performedAt?.toDate() || new Date(),
         });
         count++;
@@ -238,15 +288,33 @@ export default function Reports() {
             <div className="divide-y divide-white/6">
               {recentActivity.map((activity) => {
                 const isSale = activity.type === 'sale';
+                const canOpenSaleDetail = isSale && activity.referenceType === 'sale' && !!activity.referenceId;
                 return (
                   <div key={activity.id} className="p-4 flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {isSale ? 'Penjualan' : 'Penyesuaian Stok'}
-                      </p>
-                      <p className="mt-0.5 text-xs text-slate-400">
-                        {activity.performedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
-                      </p>
+                    <div className="flex-1 pr-4">
+                      {canOpenSaleDetail ? (
+                        <button
+                          onClick={() => handleOpenSaleDetail(activity)}
+                          disabled={isSaleDetailLoading}
+                          className="text-left"
+                        >
+                          <p className="font-medium text-sky-700 underline decoration-sky-200 underline-offset-2">
+                            Penjualan
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-400">
+                            {activity.performedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} · Ketuk untuk detail
+                          </p>
+                        </button>
+                      ) : (
+                        <>
+                          <p className="font-medium text-slate-900">
+                            {isSale ? 'Penjualan' : 'Penyesuaian Stok'}
+                          </p>
+                          <p className="mt-0.5 text-xs text-slate-400">
+                            {activity.performedAt.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                        </>
+                      )}
                     </div>
                     <div className={`font-bold ${isSale ? 'text-rose-300' : 'text-emerald-300'}`}>
                       {activity.quantityChange > 0 ? '+' : ''}{activity.quantityChange}
@@ -258,6 +326,61 @@ export default function Reports() {
           )}
         </div>
       </div>
+
+      {selectedSale && (
+        <div className="ai-modal-shell">
+          <div className="ai-modal-backdrop" onClick={() => setSelectedSale(null)} />
+          <div className="ai-modal-panel page-enter translate-y-0 scale-100">
+            <div className="flex items-center justify-between p-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">Detail Penjualan</h2>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {selectedSale.soldAt.toLocaleString('id-ID', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </p>
+              </div>
+              <button onClick={() => setSelectedSale(null)} className="ai-button-ghost rounded-full p-2 text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="ai-divider" />
+            <div className="max-h-[60vh] overflow-y-auto p-4">
+              <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Metode Pembayaran</p>
+                <p className="mt-1 text-sm font-medium text-slate-900">{selectedSale.paymentMethod}</p>
+              </div>
+
+              {selectedSale.items.length === 0 ? (
+                <p className="text-sm text-slate-500">Tidak ada item pada transaksi ini.</p>
+              ) : (
+                <div className="space-y-3">
+                  {selectedSale.items.map((item, idx) => (
+                    <div key={`${selectedSale.id}-${item.productId}-${idx}`} className="rounded-xl border border-slate-200/80 p-3">
+                      <p className="font-medium text-slate-900">{item.productNameSnapshot}</p>
+                      <div className="mt-1 flex items-center justify-between text-sm">
+                        <span className="text-slate-500">{formatNumber(item.quantity)} x Rp {formatNumber(item.unitPrice)}</span>
+                        <span className="font-semibold text-slate-900">Rp {formatNumber(item.quantity * item.unitPrice)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="ai-divider my-4" />
+
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-slate-700">Total</p>
+                <p className="text-lg font-bold text-slate-900">Rp {formatNumber(selectedSale.total)}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

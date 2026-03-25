@@ -13,9 +13,12 @@ export default defineConfig({
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       workbox: {
         navigateFallback: 'index.html',
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
       },
       devOptions: {
-        enabled: true
+        enabled: false
       },
       manifest: {
         name: 'Sukses Elektronik',
