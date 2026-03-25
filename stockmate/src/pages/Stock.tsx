@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, orderBy, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles } from 'lucide-react';
+import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles, ChevronDown, ArrowUpDown } from 'lucide-react';
 import type { Product } from '../types';
 import AddProductModal from '../components/AddProductModal';
 import { formatNumber, handleFormattedInputChange, parseNumber } from '../utils/format';
@@ -12,6 +12,8 @@ export default function Stock() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterLowStock, setFilterLowStock] = useState(false);
+  const [sortBy, setSortBy] = useState<'name' | 'sellPrice' | 'stockQty'>('name');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const { userProfile } = useAuth();
   
@@ -40,12 +42,22 @@ export default function Stock() {
     return () => unsubscribe();
   }, []);
 
-  const filteredProducts = products.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          p.sku.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesLowStock = filterLowStock ? p.stockQty <= p.lowStockThreshold : true;
-    return matchesSearch && matchesLowStock;
-  });
+  const filteredProducts = products
+    .filter((p) => {
+      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            p.sku.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesLowStock = filterLowStock ? p.stockQty <= p.lowStockThreshold : true;
+      return matchesSearch && matchesLowStock;
+    })
+    .sort((a, b) => {
+      const direction = sortOrder === 'asc' ? 1 : -1;
+
+      if (sortBy === 'name') {
+        return a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }) * direction;
+      }
+
+      return (a[sortBy] - b[sortBy]) * direction;
+    });
 
   const handleStockOpname = async () => {
     if (!editingProduct || isOpnameProcessing) return;
@@ -112,6 +124,30 @@ export default function Stock() {
           >
             <AlertTriangle className="h-4 w-4" />
             Stok Menipis
+          </button>
+        </div>
+
+        <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+          <div className="relative">
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as 'name' | 'sellPrice' | 'stockQty')}
+              className="ai-select w-full appearance-none py-2.5 pl-4 pr-10 text-sm font-medium"
+            >
+              <option value="name">Urutkan: Nama</option>
+              <option value="sellPrice">Urutkan: Harga</option>
+              <option value="stockQty">Urutkan: Stok</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+              <ChevronDown className="h-5 w-5" />
+            </div>
+          </div>
+          <button
+            onClick={() => setSortOrder((prev) => prev === 'asc' ? 'desc' : 'asc')}
+            className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700"
+          >
+            <ArrowUpDown className="h-4 w-4" />
+            {sortOrder === 'asc' ? 'A-Z / Kecil' : 'Z-A / Besar'}
           </button>
         </div>
       </section>

@@ -135,7 +135,7 @@ export default function Sell() {
 
   return (
     <>
-      <div className="ai-page page-enter">
+      <div className="ai-page page-enter pb-[12rem]">
         <div className="ai-page-grid">
           <section className="ai-card ai-page-hero stagger-fade-in">
             <div className="ai-section-title">
@@ -147,11 +147,11 @@ export default function Sell() {
             <p className="max-w-lg text-sm leading-6 text-slate-600">
               Tambah produk, atur jumlah, lalu konfirmasi pembayaran tanpa gangguan visual.
             </p>
-            <button 
+            <button
               onClick={() => setIsSearchOpen(true)}
-              className="ai-input mt-5 inline-flex w-full items-center gap-3 px-4 py-4 text-left text-slate-600 hover:border-sky-300/30 hover:text-slate-900"
+              className="ai-input mt-6 inline-flex w-full items-center gap-3 px-4 text-left text-slate-600 hover:border-indigo-300 hover:text-slate-900"
             >
-              <div className="ai-stat-orb h-11 w-11 rounded-2xl">
+              <div className="ai-stat-orb h-11 w-11">
                 <Search className="h-5 w-5 text-sky-700" />
               </div>
               <span className="flex-1 font-medium">Cari nama produk atau SKU</span>
@@ -172,10 +172,10 @@ export default function Sell() {
             </div>
           </div>
 
-          <div className="space-y-4 pb-[200px]">
+          <div className="space-y-4">
             {cart.length === 0 ? (
               <div className="ai-empty-state stagger-fade-in">
-                <div className="ai-stat-orb mx-auto mb-4 h-16 w-16 rounded-[1.5rem]">
+                <div className="ai-stat-orb mx-auto mb-4 h-16 w-16">
                   <Search className="h-8 w-8 text-sky-700" />
                 </div>
                 <p className="font-medium text-slate-900">Belum ada produk.</p>
@@ -191,7 +191,7 @@ export default function Sell() {
                   <div className="mb-4 flex items-start justify-between">
                     <div className="flex-1 pr-3">
                       <div className="mb-2 flex items-center gap-2">
-                        <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                        <span className="inline-flex rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">
                           Produk aktif
                         </span>
                         <span className="text-xs text-slate-500">Stok {formatNumber(item.stockQty)}</span>
@@ -236,10 +236,10 @@ export default function Sell() {
           </div>
         </section>
 
-        <section className="mt-4">
+        <section className="mt-5">
           <div className="ai-card p-4">
             <div className="mb-3 flex items-center gap-3">
-              <div className="ai-stat-orb h-11 w-11 rounded-2xl">
+              <div className="ai-stat-orb h-11 w-11">
                 <CreditCard className="h-5 w-5 text-sky-700" />
               </div>
               <div>
@@ -268,16 +268,16 @@ export default function Sell() {
           </div>
         </section>
 
-        <div className="fixed bottom-[78px] left-0 right-0 z-10 px-4">
-          <div className="glass-panel-strong mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-[1.25rem] p-3.5">
+        <div className="fixed bottom-[98px] left-0 right-0 z-10 px-4">
+          <div className="glass-panel-strong mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-lg px-3 py-2.5">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Total Tagihan</p>
-              <p className="ai-heading text-2xl font-black text-slate-900">Rp {formatNumber(total)}</p>
+              <p className="ai-heading text-[1.75rem] font-bold leading-none text-slate-900">Rp {formatNumber(total)}</p>
             </div>
             <button
               onClick={handleConfirmSale}
               disabled={cart.length === 0 || total === 0 || isProcessing}
-              className="ai-button min-w-[190px] px-5 py-3 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50 sm:text-base"
+              className="ai-button min-w-[160px] px-4 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isProcessing ? (
                 <span className="flex items-center gap-2">

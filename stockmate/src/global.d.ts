@@ -13,6 +13,7 @@ declare global {
 
   interface Window {
     recaptchaVerifier?: RecaptchaVerifier;
+    forcePwaRefresh?: () => void;
   }
   
   const grecaptcha: {

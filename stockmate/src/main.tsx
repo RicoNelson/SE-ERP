@@ -11,6 +11,48 @@ const updateSW = registerSW({
   },
 })
 
+const checkServiceWorkerUpdate = async () => {
+  const registration = await navigator.serviceWorker?.getRegistration()
+  if (registration) {
+    await registration.update()
+  }
+}
+
+const resetPwaCache = async () => {
+  const registrations = await navigator.serviceWorker?.getRegistrations()
+  if (registrations?.length) {
+    await Promise.all(registrations.map((registration) => registration.unregister()))
+  }
+
+  const cacheKeys = await caches.keys()
+  if (cacheKeys.length) {
+    await Promise.all(cacheKeys.map((key) => caches.delete(key)))
+  }
+
+  window.location.reload()
+}
+
+if ('serviceWorker' in navigator) {
+  checkServiceWorkerUpdate()
+  window.addEventListener('focus', () => {
+    void checkServiceWorkerUpdate()
+  })
+  window.addEventListener('pageshow', () => {
+    void checkServiceWorkerUpdate()
+  })
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      void checkServiceWorkerUpdate()
+    }
+  })
+  window.setInterval(() => {
+    void checkServiceWorkerUpdate()
+  }, 60_000)
+  window.forcePwaRefresh = () => {
+    void resetPwaCache()
+  }
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />

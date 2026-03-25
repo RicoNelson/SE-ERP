@@ -16,6 +16,16 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true,
+        runtimeCaching: [
+          {
+            urlPattern: ({ request }) => request.mode === 'navigate',
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'html-shell',
+              networkTimeoutSeconds: 3
+            }
+          }
+        ]
       },
       devOptions: {
         enabled: false
