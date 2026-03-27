@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useBeforeUnload, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   collection,
   type DocumentReference,
@@ -26,7 +26,7 @@ import {
   type ProductFormFieldErrors,
   type ProductFormData,
 } from '../features/products/productForm';
-import { formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
+import { formatDateId, formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
 
 type StockAddTab = 'product' | 'pb';
 
@@ -64,8 +64,6 @@ interface PoRowFieldErrors {
   inlineProductForm?: ProductFormFieldErrors;
 }
 
-const PO_DRAFT_STORAGE_KEY = 'stockmate:po-draft:v1';
-const LEGACY_DRAFT_KEYS = ['stockmate:pb-draft:v1'];
 const uppercaseInputValue = (value: string) => value.toLocaleUpperCase('id-ID');
 const trimEdgeWhitespace = (value: string) => value.trim();
 const uppercaseProductFormInput = (form: ProductFormData): ProductFormData => ({
@@ -102,7 +100,16 @@ const makePoDraft = (): PoDraftState => ({
   rows: [makeRow()],
 });
 
-const hasMeaningfulDraftData = (draft: PoDraftState): boolean =>
+const hasProductFormChanges = (form: ProductFormData): boolean =>
+  Object.entries(form).some(([key, value]) => {
+    const initialValue = DEFAULT_PRODUCT_FORM[key as keyof ProductFormData];
+    if (typeof value === 'string' && typeof initialValue === 'string') {
+      return value.trim() !== initialValue.trim();
+    }
+    return value !== initialValue;
+  });
+
+const hasMeaningfulPbData = (draft: PoDraftState): boolean =>
   Boolean(
     draft.receiptCode.trim()
     || (draft.receiptDate && draft.receiptDate !== getTodayDateInput())
@@ -111,17 +118,12 @@ const hasMeaningfulDraftData = (draft: PoDraftState): boolean =>
     || draft.rows.some((row) =>
       row.productNameInput.trim()
       || row.selectedProductId
-      || row.qty
-      || row.buyPrice
-      || row.sellPrice
+      || row.qty.trim()
+      || row.buyPrice.trim()
+      || row.sellPrice.trim()
       || row.inlineProductEnabled,
     ),
   );
-
-const clearDraftStorage = () => {
-  window.localStorage.removeItem(PO_DRAFT_STORAGE_KEY);
-  LEGACY_DRAFT_KEYS.forEach((key) => window.localStorage.removeItem(key));
-};
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -208,7 +210,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
               }}
               onChange={(e) =>
                 onChange(row.id, {
-                  productNameInput: trimEdgeWhitespace(e.target.value),
+                  productNameInput: e.target.value,
                   selectedProductId: null,
                 })
               }
@@ -232,7 +234,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
                   >
                     <p className="font-medium text-slate-900">{formatProductName(product.name)}</p>
                     <p className="text-xs text-slate-500">
-                      SKU: {product.sku || '-'} • Stok tersisa: {formatNumber(product.stockQty)}
+                      SKU: {product.sku || '-'} • Stok tersisa: {formatNumber(product.stockQty)} • PB terakhir: {formatDateId(product.latestPbDate)}
                     </p>
                   </button>
                 ))}
@@ -418,9 +420,23 @@ export default function StockAdd() {
   const [poFormError, setPoFormError] = useState('');
   const [poHeaderErrors, setPoHeaderErrors] = useState<PoHeaderErrors>({});
   const [poRowErrors, setPoRowErrors] = useState<Record<string, PoRowFieldErrors>>({});
-  const [draftHydrated, setDraftHydrated] = useState(false);
   const [hasAppliedProductPrefill, setHasAppliedProductPrefill] = useState(false);
   const { currentUser } = useAuth();
+  const hasUnsavedChanges = hasProductFormChanges(productForm) || hasMeaningfulPbData(poDraft);
+
+  useBeforeUnload((event) => {
+    if (!hasUnsavedChanges || isSavingPo || isSavingProduct) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+
+  const handleBack = () => {
+    if (hasUnsavedChanges && !isSavingPo && !isSavingProduct) {
+      const confirmed = window.confirm('Yakin ingin kembali? Input saat ini belum disimpan dan akan hilang.');
+      if (!confirmed) return;
+    }
+    navigate('/stock');
+  };
 
   useEffect(() => {
     const q = query(collection(db, 'products'), orderBy('name'));
@@ -433,54 +449,6 @@ export default function StockAdd() {
   }, []);
 
   useEffect(() => {
-    const raw = window.localStorage.getItem(PO_DRAFT_STORAGE_KEY);
-    if (!raw) {
-      setDraftHydrated(true);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw) as PoDraftState;
-      if (!parsed || !Array.isArray(parsed.rows) || parsed.rows.length === 0 || !hasMeaningfulDraftData(parsed)) {
-        clearDraftStorage();
-        setDraftHydrated(true);
-        return;
-      }
-
-      const shouldRestore = window.confirm('Lanjutkan draft sebelumnya?');
-      if (!shouldRestore) {
-        clearDraftStorage();
-        setDraftHydrated(true);
-        return;
-      }
-
-      setPoDraft({
-        ...parsed,
-        idempotencyKey: parsed.idempotencyKey || crypto.randomUUID(),
-        rows: parsed.rows.map((row) => ({
-          ...row,
-          id: row.id || crypto.randomUUID(),
-          inlineProductForm: row.inlineProductForm || { ...DEFAULT_PRODUCT_FORM },
-        })),
-      });
-    } catch {
-      clearDraftStorage();
-    } finally {
-      setDraftHydrated(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!draftHydrated) return;
-    const hasMeaningfulData = hasMeaningfulDraftData(poDraft);
-
-    if (!hasMeaningfulData) {
-      clearDraftStorage();
-      return;
-    }
-    window.localStorage.setItem(PO_DRAFT_STORAGE_KEY, JSON.stringify(poDraft));
-  }, [poDraft, draftHydrated]);
-
-  useEffect(() => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('tab', tab);
@@ -490,7 +458,7 @@ export default function StockAdd() {
 
   useEffect(() => {
     const preselectProductId = searchParams.get('productId');
-    if (!preselectProductId || !products.length || !draftHydrated || hasAppliedProductPrefill) return;
+    if (!preselectProductId || !products.length || hasAppliedProductPrefill) return;
     const hasEmptyDraft = poDraft.rows.length === 1
       && !poDraft.rows[0].selectedProductId
       && !poDraft.rows[0].productNameInput
@@ -524,7 +492,7 @@ export default function StockAdd() {
       next.delete('productId');
       return next;
     });
-  }, [searchParams, products, poDraft.rows, draftHydrated, hasAppliedProductPrefill, setSearchParams]);
+  }, [searchParams, products, poDraft.rows, hasAppliedProductPrefill, setSearchParams]);
 
   const setPoRow = (rowId: string, patch: Partial<PoDraftRow>) => {
     setPoFormError('');
@@ -538,7 +506,7 @@ export default function StockAdd() {
     const normalizedPatch: Partial<PoDraftRow> = {
       ...patch,
       ...(typeof patch.productNameInput === 'string'
-        ? { productNameInput: trimEdgeWhitespace(patch.productNameInput) }
+        ? { productNameInput: uppercaseInputValue(trimEdgeWhitespace(patch.productNameInput)) }
         : {}),
       ...(patch.inlineProductForm
         ? { inlineProductForm: uppercaseProductFormInput(patch.inlineProductForm) }
@@ -943,6 +911,7 @@ export default function StockAdd() {
             stockQty: nextStock,
             costPrice: unitCost,
             sellPrice,
+            latestPbDate: receiptDate,
             updatedAt: serverTimestamp(),
           });
 
@@ -987,14 +956,12 @@ export default function StockAdd() {
 
       if (response.status === 'duplicate') {
         setPoDraft(makePoDraft());
-        clearDraftStorage();
         alert(`Request ini sudah pernah diproses (PB: ${response.purchaseId}).`);
         navigate('/stock');
         return;
       }
 
       setPoDraft(makePoDraft());
-      clearDraftStorage();
       alert('Pembelian Barang berhasil disimpan.');
       navigate('/stock');
     } catch (error) {
@@ -1016,10 +983,10 @@ export default function StockAdd() {
       <section className="ai-card space-y-4 p-5">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <Link to="/stock" className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-slate-700">
+            <button type="button" onClick={handleBack} className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-slate-700">
               <ArrowLeft className="h-4 w-4" />
               Kembali
-            </Link>
+            </button>
             <div>
               <p className="ai-kicker mb-1">Inventaris</p>
               <h2 className="ai-heading text-2xl font-bold text-slate-900">Tambah Data Stok</h2>

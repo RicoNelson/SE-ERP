@@ -47,3 +47,36 @@ export const normalizeSearchQuery = (value: string | undefined | null): string =
   if (!value) return '';
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('id-ID');
 };
+
+export const toDateValue = (value: unknown): Date | null => {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === 'object' && value !== null && 'toDate' in value) {
+    const maybeTimestamp = value as { toDate?: () => unknown };
+    const converted = maybeTimestamp.toDate?.();
+    if (converted instanceof Date && !Number.isNaN(converted.getTime())) {
+      return converted;
+    }
+  }
+
+  if (typeof value === 'string' || typeof value === 'number') {
+    const converted = new Date(value);
+    return Number.isNaN(converted.getTime()) ? null : converted;
+  }
+
+  return null;
+};
+
+export const formatDateId = (value: unknown, fallback = '-'): string => {
+  const dateValue = toDateValue(value);
+  if (!dateValue) return fallback;
+  return new Intl.DateTimeFormat('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(dateValue);
+};

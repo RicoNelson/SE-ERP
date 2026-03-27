@@ -1,4 +1,4 @@
-import { formatProductName, handleFormattedInputChange } from '../utils/format';
+import { handleFormattedInputChange } from '../utils/format';
 import type { ProductFormData, ProductFormFieldErrors } from '../features/products/productForm';
 
 interface ProductFormFieldsProps {
@@ -23,7 +23,7 @@ export default function ProductFormFields({ value, onChange, idPrefix, errors }:
           className={getInputClassName(Boolean(errors?.name))}
           placeholder="Misal: Samsung Charger 25W"
           value={value.name}
-          onChange={(e) => onChange({ ...value, name: formatProductName(e.target.value) })}
+          onChange={(e) => onChange({ ...value, name: e.target.value.toLocaleUpperCase('id-ID') })}
           aria-invalid={Boolean(errors?.name)}
           aria-describedby={errors?.name ? `${idPrefix}-name-error` : undefined}
         />

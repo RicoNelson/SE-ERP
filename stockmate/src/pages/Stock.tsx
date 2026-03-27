@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, orderBy, doc, serverTimestamp, runTransaction, where, limit, getDocs, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles, ChevronDown, ArrowUpDown, PackagePlus, Trash2 } from 'lucide-react';
+import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles, ChevronDown, ArrowUpDown, PackagePlus, Trash2, FileText } from 'lucide-react';
 import type { Product } from '../types';
-import { formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
+import { formatDateId, formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -55,6 +55,9 @@ export default function Stock() {
   const [recentMovements, setRecentMovements] = useState<ProductMovement[]>([]);
   const [fifoLayers, setFifoLayers] = useState<ProductFifoLayer[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [lowStockThresholdInput, setLowStockThresholdInput] = useState('');
+  const [isSavingLowStockThreshold, setIsSavingLowStockThreshold] = useState(false);
+  const [lowStockThresholdError, setLowStockThresholdError] = useState('');
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeletingProduct, setIsDeletingProduct] = useState(false);
   const normalizedSearchQuery = normalizeSearchQuery(searchQuery);
@@ -360,6 +363,17 @@ export default function Stock() {
     };
   }, [selectedProductDetail?.id, selectedProductDetail?.sellPrice]);
 
+  useEffect(() => {
+    if (!selectedProductDetail) {
+      setLowStockThresholdInput('');
+      setLowStockThresholdError('');
+      setIsSavingLowStockThreshold(false);
+      return;
+    }
+    setLowStockThresholdInput(formatNumber(selectedProductDetail.lowStockThreshold || 0));
+    setLowStockThresholdError('');
+  }, [selectedProductDetail]);
+
   const formatMovementSource = (movement: ProductMovement) => {
     if (movement.referenceType === 'purchase_order') {
       const base = movement.receiptCode ? `PB ${movement.receiptCode}` : `PB ${movement.referenceId || '-'}`;
@@ -395,6 +409,56 @@ export default function Stock() {
       alert(message);
     } finally {
       setIsDeletingProduct(false);
+    }
+  };
+
+  const handleSaveLowStockThreshold = async () => {
+    if (!selectedProductDetail?.id || isSavingLowStockThreshold) return;
+    if (!lowStockThresholdInput.trim()) {
+      setLowStockThresholdError('Batas barang menipis wajib diisi.');
+      return;
+    }
+
+    const nextThreshold = parseNumber(lowStockThresholdInput);
+    if (nextThreshold < 0) {
+      setLowStockThresholdError('Batas barang menipis tidak boleh negatif.');
+      return;
+    }
+
+    setIsSavingLowStockThreshold(true);
+    setLowStockThresholdError('');
+    try {
+      await runTransaction(db, async (transaction) => {
+        const productRef = doc(db, 'products', selectedProductDetail.id!);
+        const productSnap = await transaction.get(productRef);
+        if (!productSnap.exists()) {
+          throw new Error('Produk tidak ditemukan');
+        }
+        transaction.update(productRef, {
+          lowStockThreshold: nextThreshold,
+          updatedAt: serverTimestamp(),
+        });
+      });
+
+      setProducts((prev) => prev.map((item) => (
+        item.id === selectedProductDetail.id
+          ? { ...item, lowStockThreshold: nextThreshold }
+          : item
+      )));
+      setSelectedProductDetail((prev) => (
+        prev ? { ...prev, lowStockThreshold: nextThreshold } : prev
+      ));
+      setEditingProduct((prev) => (
+        prev && prev.id === selectedProductDetail.id
+          ? { ...prev, lowStockThreshold: nextThreshold }
+          : prev
+      ));
+    } catch (error) {
+      console.error('Error updating low stock threshold:', error);
+      const message = error instanceof Error ? error.message : 'Gagal menyimpan batas barang menipis';
+      setLowStockThresholdError(message);
+    } finally {
+      setIsSavingLowStockThreshold(false);
     }
   };
 
@@ -513,6 +577,7 @@ export default function Stock() {
                   <div>
                     <h3 className="font-semibold leading-tight text-slate-900">{formatProductName(product.name)}</h3>
                     <p className="mt-1 text-xs text-slate-400">SKU: {product.sku}</p>
+                    <p className="mt-1 text-xs text-slate-500">PB terakhir: {formatDateId(product.latestPbDate)}</p>
                   </div>
                   <div className="text-right">
                     <div className={`text-lg font-bold ${isLowStock ? 'text-rose-500' : 'text-slate-900'}`}>
@@ -598,16 +663,24 @@ export default function Stock() {
         )}
       </section>
 
-      {userRole === 'owner' && (
-        <div className="fixed bottom-[92px] right-4 flex flex-col gap-3">
+      <div className="fixed bottom-[92px] right-4 flex flex-col gap-3">
+        <button
+          onClick={() => navigate('/stock/pb')}
+          className="ai-button-ghost flex items-center justify-center rounded-full border border-sky-200 bg-white p-3.5 text-sky-700 shadow-[0_16px_34px_rgba(14,165,233,0.16)]"
+          title="Kelola PB"
+          aria-label="Kelola PB"
+        >
+          <FileText className="h-6 w-6" />
+        </button>
+        {userRole === 'owner' && (
           <button 
             onClick={() => navigate('/stock/add?tab=product')}
             className="ai-button flex items-center justify-center rounded-full p-3.5"
           >
             <Plus className="h-6 w-6" />
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Stock Opname Modal */}
       {editingProduct && (
@@ -732,6 +805,46 @@ export default function Stock() {
             </div>
             <div className="ai-divider" />
             <div className="max-h-[72vh] space-y-5 overflow-y-auto p-4">
+              <section className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <h3 className="text-sm font-semibold text-slate-900">Barang Menipis</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Batas saat ini: {formatNumber(selectedProductDetail.lowStockThreshold || 0)} • Stok: {formatNumber(selectedProductDetail.stockQty || 0)}
+                </p>
+                {userRole === 'owner' ? (
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      className={`ai-input w-full px-3 py-2.5 text-sm transition-colors duration-200 ${lowStockThresholdError ? 'ai-input-error' : ''}`}
+                      value={lowStockThresholdInput}
+                      onChange={(e) => {
+                        const { formatted } = handleFormattedInputChange(e.target.value);
+                        setLowStockThresholdInput(formatted);
+                        setLowStockThresholdError('');
+                      }}
+                      placeholder="Contoh: 10"
+                      aria-invalid={Boolean(lowStockThresholdError)}
+                      aria-describedby={lowStockThresholdError ? 'low-stock-threshold-error' : undefined}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveLowStockThreshold}
+                      disabled={isSavingLowStockThreshold}
+                      className="ai-button px-4 py-2.5 text-sm font-semibold disabled:opacity-50"
+                    >
+                      {isSavingLowStockThreshold ? 'MENYIMPAN...' : 'Simpan Batas'}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-slate-500">Hanya owner yang bisa mengubah batas barang menipis.</p>
+                )}
+                {lowStockThresholdError && (
+                  <p id="low-stock-threshold-error" className="ai-field-error mt-1 text-xs">
+                    {lowStockThresholdError}
+                  </p>
+                )}
+              </section>
+
               <section>
                 <h3 className="mb-2 text-sm font-semibold text-slate-900">5 Aktivitas Stok Terbaru</h3>
                 {detailLoading ? (

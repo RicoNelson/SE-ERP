@@ -11,6 +11,7 @@ export interface Product {
   costPrice: number; // Harga Modal
   stockQty: number;
   lowStockThreshold: number;
+  latestPbDate?: FirestoreDate;
   isActive: boolean;
   createdAt?: FirestoreDate;
   updatedAt?: FirestoreDate;

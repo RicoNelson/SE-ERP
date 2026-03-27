@@ -3,7 +3,7 @@ import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Search, ChevronLeft, ChevronDown, Plus } from 'lucide-react';
 import type { Product } from '../types';
-import { formatNumber, formatProductName, normalizeSearchQuery } from '../utils/format';
+import { formatDateId, formatNumber, formatProductName, normalizeSearchQuery } from '../utils/format';
 
 interface ProductSearchModalProps {
   isOpen: boolean;
@@ -137,6 +137,7 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
                       Stok: {formatNumber(product.stockQty)} {isOutOfStock ? '(Habis!)' : isLowStock ? '(Menipis)' : ''}
                     </span>
                   </div>
+                  <p className="mt-1 text-xs text-slate-500">PB terakhir: {formatDateId(product.latestPbDate)}</p>
                 </div>
                 <button 
                   onClick={() => onAddProduct(product)}
