@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { collection, query, onSnapshot, orderBy, doc, serverTimestamp, runTransaction, where, limit, getDocs } from 'firebase/firestore';
+import { collection, query, onSnapshot, orderBy, doc, serverTimestamp, runTransaction, where, limit, getDocs, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles, ChevronDown, ArrowUpDown, PackagePlus } from 'lucide-react';
+import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles, ChevronDown, ArrowUpDown, PackagePlus, Trash2 } from 'lucide-react';
 import type { Product } from '../types';
 import { formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
 import { useAuth } from '../contexts/AuthContext';
@@ -36,6 +36,8 @@ export default function Stock() {
   const [filterLowStock, setFilterLowStock] = useState(false);
   const [sortBy, setSortBy] = useState<'name' | 'sellPrice' | 'stockQty'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [productsPerPage, setProductsPerPage] = useState(10);
   const { userProfile, currentUser } = useAuth();
   const navigate = useNavigate();
   
@@ -48,10 +50,13 @@ export default function Stock() {
   const [selectedOpnameLayerId, setSelectedOpnameLayerId] = useState('');
   const [isOpnameLayersLoading, setIsOpnameLayersLoading] = useState(false);
   const [isOpnameProcessing, setIsOpnameProcessing] = useState(false);
+  const [opnameFieldErrors, setOpnameFieldErrors] = useState<{ opnameQty?: string; selectedOpnameLayerId?: string }>({});
   const [selectedProductDetail, setSelectedProductDetail] = useState<Product | null>(null);
   const [recentMovements, setRecentMovements] = useState<ProductMovement[]>([]);
   const [fifoLayers, setFifoLayers] = useState<ProductFifoLayer[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+  const [isDeletingProduct, setIsDeletingProduct] = useState(false);
   const normalizedSearchQuery = normalizeSearchQuery(searchQuery);
 
   useEffect(() => {
@@ -149,8 +154,30 @@ export default function Stock() {
       return (a[sortBy] - b[sortBy]) * direction;
     });
 
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / productsPerPage));
+  const startIndex = (currentPage - 1) * productsPerPage;
+  const paginatedProducts = filteredProducts.slice(startIndex, startIndex + productsPerPage);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterLowStock, sortBy, sortOrder, productsPerPage]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
   const handleStockOpname = async () => {
     if (!editingProduct || isOpnameProcessing) return;
+    const nextFieldErrors: { opnameQty?: string; selectedOpnameLayerId?: string } = {};
+    if (!opnameQty.trim()) nextFieldErrors.opnameQty = 'Jumlah stok fisik wajib diisi.';
+    if (!selectedOpnameLayerId) nextFieldErrors.selectedOpnameLayerId = 'Layer FIFO wajib dipilih.';
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setOpnameFieldErrors(nextFieldErrors);
+      return;
+    }
+    setOpnameFieldErrors({});
     setIsOpnameProcessing(true);
     try {
       const newQty = parseNumber(opnameQty);
@@ -235,6 +262,7 @@ export default function Stock() {
       setEditingProduct(null);
       setOpnameQty('');
       setSelectedOpnameLayerId('');
+      setOpnameFieldErrors({});
     } catch (error) {
       console.error("Error updating stock:", error);
       const message = error instanceof Error ? error.message : 'Gagal melakukan stock opname';
@@ -349,6 +377,27 @@ export default function Stock() {
     return movement.referenceType || 'Manual';
   };
 
+  const handleDeleteProduct = async () => {
+    if (!productToDelete?.id || isDeletingProduct) return;
+    setIsDeletingProduct(true);
+    try {
+      await deleteDoc(doc(db, 'products', productToDelete.id));
+      if (selectedProductDetail?.id === productToDelete.id) {
+        setSelectedProductDetail(null);
+      }
+      if (editingProduct?.id === productToDelete.id) {
+        setEditingProduct(null);
+      }
+      setProductToDelete(null);
+    } catch (error) {
+      console.error('Error deleting product:', error);
+      const message = error instanceof Error ? error.message : 'Gagal menghapus produk';
+      alert(message);
+    } finally {
+      setIsDeletingProduct(false);
+    }
+  };
+
   return (
     <div className="ai-page page-enter">
       <section className="ai-card ai-page-hero stagger-fade-in">
@@ -420,6 +469,26 @@ export default function Stock() {
             {sortOrder === 'asc' ? 'A-Z / Kecil' : 'Z-A / Besar'}
           </button>
         </div>
+
+        <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">
+          <div className="relative">
+            <select
+              value={productsPerPage}
+              onChange={(e) => setProductsPerPage(Number(e.target.value))}
+              className="ai-select w-full appearance-none py-2.5 pl-4 pr-10 text-sm font-medium"
+            >
+              <option value={10}>10 produk / halaman</option>
+              <option value={20}>20 produk / halaman</option>
+              <option value={50}>50 produk / halaman</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+              <ChevronDown className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="inline-flex items-center justify-center rounded-full border border-slate-200 px-3 text-xs font-semibold text-slate-600">
+            Total: {filteredProducts.length}
+          </div>
+        </div>
       </section>
 
       <section className="mt-4 space-y-3 pb-24">
@@ -431,7 +500,7 @@ export default function Stock() {
             <p className="mt-1 text-sm text-slate-500">Coba ubah kata kunci pencarian atau filter stok.</p>
           </div>
         ) : (
-          filteredProducts.map((product, index) => {
+          paginatedProducts.map((product, index) => {
             const isLowStock = product.stockQty <= product.lowStockThreshold;
             return (
               <div
@@ -481,11 +550,22 @@ export default function Stock() {
                           event.stopPropagation();
                           setEditingProduct(product);
                           setOpnameQty(product.stockQty.toString());
+                          setOpnameFieldErrors({});
                         }}
                         className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-sky-700"
                       >
                         <Edit2 className="h-4 w-4" />
                         Opname
+                      </button>
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setProductToDelete(product);
+                        }}
+                        className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-rose-600"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Hapus
                       </button>
                     </div>
                   )}
@@ -493,6 +573,28 @@ export default function Stock() {
               </div>
             );
           })
+        )}
+
+        {!loading && filteredProducts.length > 0 && (
+          <div className="mt-4 flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-3 py-2.5">
+            <button
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+              className="ai-button-ghost px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Sebelumnya
+            </button>
+            <p className="text-sm font-medium text-slate-600">
+              Halaman {currentPage} / {totalPages}
+            </p>
+            <button
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+              className="ai-button-ghost px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Berikutnya
+            </button>
+          </div>
         )}
       </section>
 
@@ -510,11 +612,23 @@ export default function Stock() {
       {/* Stock Opname Modal */}
       {editingProduct && (
         <div className="ai-modal-shell">
-          <div className="ai-modal-backdrop" onClick={() => setEditingProduct(null)} />
+          <div
+            className="ai-modal-backdrop"
+            onClick={() => {
+              setOpnameFieldErrors({});
+              setEditingProduct(null);
+            }}
+          />
           <div className="ai-modal-panel page-enter translate-y-0 scale-100">
             <div className="flex items-center justify-between p-4">
               <h2 className="text-lg font-bold text-slate-900">Stock Opname</h2>
-              <button onClick={() => setEditingProduct(null)} className="ai-button-ghost rounded-full p-2 text-slate-600">
+              <button
+                onClick={() => {
+                  setOpnameFieldErrors({});
+                  setEditingProduct(null);
+                }}
+                className="ai-button-ghost rounded-full p-2 text-slate-600"
+              >
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -528,13 +642,21 @@ export default function Stock() {
                   type="text"
                   inputMode="numeric"
                   autoFocus
-                  className="ai-input w-full px-4 py-3 text-center text-xl font-bold"
+                  className={`ai-input w-full px-4 py-3 text-center text-xl font-bold transition-colors duration-200 ${opnameFieldErrors.opnameQty ? 'ai-input-error' : ''}`}
                   value={opnameQty}
                   onChange={(e) => {
                     const { formatted } = handleFormattedInputChange(e.target.value);
                     setOpnameQty(formatted);
+                    setOpnameFieldErrors((prev) => ({ ...prev, opnameQty: undefined }));
                   }}
+                  aria-invalid={Boolean(opnameFieldErrors.opnameQty)}
+                  aria-describedby={opnameFieldErrors.opnameQty ? 'opname-qty-error' : undefined}
                 />
+                {opnameFieldErrors.opnameQty && (
+                  <p id="opname-qty-error" className="ai-field-error mt-1 text-xs">
+                    {opnameFieldErrors.opnameQty}
+                  </p>
+                )}
                 <p className="mt-2 text-xs text-slate-500">
                   Perubahan: {parseNumber(opnameQty) - (editingProduct.stockQty || 0) > 0 ? '+' : ''}{formatNumber(parseNumber(opnameQty) - (editingProduct.stockQty || 0))}
                 </p>
@@ -548,8 +670,13 @@ export default function Stock() {
                   <>
                     <select
                       value={selectedOpnameLayerId}
-                      onChange={(e) => setSelectedOpnameLayerId(e.target.value)}
-                      className="ai-select w-full appearance-none py-3 px-4 text-sm"
+                      onChange={(e) => {
+                        setSelectedOpnameLayerId(e.target.value);
+                        setOpnameFieldErrors((prev) => ({ ...prev, selectedOpnameLayerId: undefined }));
+                      }}
+                      className={`ai-select w-full appearance-none px-4 py-3 text-sm transition-colors duration-200 ${opnameFieldErrors.selectedOpnameLayerId ? 'ai-select-error' : ''}`}
+                      aria-invalid={Boolean(opnameFieldErrors.selectedOpnameLayerId)}
+                      aria-describedby={opnameFieldErrors.selectedOpnameLayerId ? 'opname-layer-error' : undefined}
                     >
                       {opnameLayers.map((layer) => (
                         <option key={layer.id} value={layer.id}>
@@ -560,6 +687,11 @@ export default function Stock() {
                         </option>
                       ))}
                     </select>
+                    {opnameFieldErrors.selectedOpnameLayerId && (
+                      <p id="opname-layer-error" className="ai-field-error mt-1 text-xs">
+                        {opnameFieldErrors.selectedOpnameLayerId}
+                      </p>
+                    )}
                     <p className="mt-2 text-xs text-slate-500">
                       Penyesuaian stok hanya menggunakan layer FIFO yang sudah ada.
                     </p>
@@ -652,6 +784,50 @@ export default function Stock() {
                   </div>
                 )}
               </section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {productToDelete && (
+        <div className="ai-modal-shell">
+          <div
+            className="ai-modal-backdrop"
+            onClick={() => {
+              if (!isDeletingProduct) setProductToDelete(null);
+            }}
+          />
+          <div className="ai-modal-panel page-enter translate-y-0 scale-100">
+            <div className="flex items-start gap-3 p-4">
+              <div className="rounded-full bg-rose-100 p-2 text-rose-600">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-600">Tindakan Berbahaya</p>
+                <h2 className="mt-1 text-lg font-bold text-slate-900">Hapus produk secara permanen?</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Anda akan menghapus <span className="font-semibold text-slate-900">{formatProductName(productToDelete.name)}</span> secara permanen.
+                  Tindakan ini tidak dapat dibatalkan dan data produk akan hilang selamanya.
+                </p>
+              </div>
+            </div>
+            <div className="ai-divider" />
+            <div className="grid grid-cols-2 gap-2 p-4">
+              <button
+                onClick={() => setProductToDelete(null)}
+                disabled={isDeletingProduct}
+                className="ai-button-ghost px-4 py-3 font-semibold text-slate-700 disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleDeleteProduct}
+                disabled={isDeletingProduct}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-rose-600 px-4 py-3 font-semibold text-white shadow-[0_18px_38px_rgba(244,63,94,0.28)] transition hover:bg-rose-500 disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                {isDeletingProduct ? 'MENGHAPUS...' : 'HAPUS PERMANEN'}
+              </button>
             </div>
           </div>
         </div>

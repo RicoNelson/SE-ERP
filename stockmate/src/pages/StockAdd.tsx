@@ -19,10 +19,11 @@ import ProductFormFields from '../components/ProductFormFields';
 import { useAuth } from '../contexts/AuthContext';
 import {
   DEFAULT_PRODUCT_FORM,
+  getProductFormFieldErrors,
   normalizeProductForm,
   toNameKey,
   toProductDocument,
-  validateProductForm,
+  type ProductFormFieldErrors,
   type ProductFormData,
 } from '../features/products/productForm';
 import { formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
@@ -49,8 +50,29 @@ interface PoDraftState {
   rows: PoDraftRow[];
 }
 
+interface PoHeaderErrors {
+  receiptCode?: string;
+  receiptDate?: string;
+  supplierName?: string;
+}
+
+interface PoRowFieldErrors {
+  productNameInput?: string;
+  qty?: string;
+  buyPrice?: string;
+  sellPrice?: string;
+  inlineProductForm?: ProductFormFieldErrors;
+}
+
 const PO_DRAFT_STORAGE_KEY = 'stockmate:po-draft:v1';
 const LEGACY_DRAFT_KEYS = ['stockmate:pb-draft:v1'];
+const uppercaseInputValue = (value: string) => value.toLocaleUpperCase('id-ID');
+const trimEdgeWhitespace = (value: string) => value.trim();
+const uppercaseProductFormInput = (form: ProductFormData): ProductFormData => ({
+  ...form,
+  name: uppercaseInputValue(form.name),
+  sku: uppercaseInputValue(form.sku),
+});
 
 const getTodayDateInput = () => {
   const now = new Date();
@@ -115,13 +137,17 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 interface PoRowEditorProps {
   row: PoDraftRow;
   products: Product[];
+  rowIndex: number;
+  errors?: PoRowFieldErrors;
   onChange: (rowId: string, patch: Partial<PoDraftRow>) => void;
   onRemove: (rowId: string) => void;
 }
 
-function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
+function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: PoRowEditorProps) {
   const [isFocusOpen, setIsFocusOpen] = useState(false);
   const debouncedQuery = useDebouncedValue(row.productNameInput, 280);
+  const getInputClassName = (hasError?: boolean) =>
+    `ai-input w-full px-4 py-3 transition-colors duration-200 ${hasError ? 'ai-input-error' : ''}`;
 
   const suggestions = useMemo(() => {
     const queryText = normalizeSearchQuery(debouncedQuery);
@@ -173,7 +199,7 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
             <label className="mb-1 block text-sm font-medium text-slate-700">Nama Produk *</label>
             <input
               type="text"
-              className="ai-input w-full px-4 py-3"
+              className={getInputClassName(Boolean(errors?.productNameInput))}
               placeholder="Cari produk..."
               value={row.productNameInput}
               onFocus={() => setIsFocusOpen(true)}
@@ -182,11 +208,18 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
               }}
               onChange={(e) =>
                 onChange(row.id, {
-                  productNameInput: formatProductName(e.target.value),
+                  productNameInput: trimEdgeWhitespace(e.target.value),
                   selectedProductId: null,
                 })
               }
+              aria-invalid={Boolean(errors?.productNameInput)}
+              aria-describedby={errors?.productNameInput ? `po-row-${row.id}-product-error` : undefined}
             />
+            {errors?.productNameInput && (
+              <p id={`po-row-${row.id}-product-error`} className="ai-field-error mt-1 text-xs">
+                {errors.productNameInput}
+              </p>
+            )}
             {isFocusOpen && (
               <div className="absolute z-10 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
                 {suggestions.map((product) => (
@@ -213,7 +246,7 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
                         selectedProductId: null,
                         inlineProductForm: {
                           ...row.inlineProductForm,
-                          name: formatProductName(row.productNameInput),
+                          name: uppercaseInputValue(trimEdgeWhitespace(row.productNameInput)),
                           costPrice: row.buyPrice,
                           sellPrice: row.sellPrice,
                           stockQty: '0',
@@ -235,20 +268,27 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
               <input
                 type="text"
                 inputMode="numeric"
-                className="ai-input w-full px-4 py-3"
+                className={getInputClassName(Boolean(errors?.qty))}
                 value={row.qty}
                 onChange={(e) => {
                   const { formatted } = handleFormattedInputChange(e.target.value);
                   onChange(row.id, { qty: formatted });
                 }}
+                aria-invalid={Boolean(errors?.qty)}
+                aria-describedby={errors?.qty ? `po-row-${row.id}-qty-error` : undefined}
               />
+              {errors?.qty && (
+                <p id={`po-row-${row.id}-qty-error`} className="ai-field-error mt-1 text-xs">
+                  {errors.qty}
+                </p>
+              )}
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Harga Beli *</label>
               <input
                 type="text"
                 inputMode="numeric"
-                className="ai-input w-full px-4 py-3"
+                className={getInputClassName(Boolean(errors?.buyPrice))}
                 value={row.buyPrice}
                 onChange={(e) => {
                   const { formatted } = handleFormattedInputChange(e.target.value);
@@ -257,14 +297,21 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
                     inlineProductForm: { ...row.inlineProductForm, costPrice: formatted },
                   });
                 }}
+                aria-invalid={Boolean(errors?.buyPrice)}
+                aria-describedby={errors?.buyPrice ? `po-row-${row.id}-buy-error` : undefined}
               />
+              {errors?.buyPrice && (
+                <p id={`po-row-${row.id}-buy-error`} className="ai-field-error mt-1 text-xs">
+                  {errors.buyPrice}
+                </p>
+              )}
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Harga Jual *</label>
               <input
                 type="text"
                 inputMode="numeric"
-                className="ai-input w-full px-4 py-3"
+                className={getInputClassName(Boolean(errors?.sellPrice))}
                 value={row.sellPrice}
                 onChange={(e) => {
                   const { formatted } = handleFormattedInputChange(e.target.value);
@@ -273,7 +320,14 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
                     inlineProductForm: { ...row.inlineProductForm, sellPrice: formatted },
                   });
                 }}
+                aria-invalid={Boolean(errors?.sellPrice)}
+                aria-describedby={errors?.sellPrice ? `po-row-${row.id}-sell-error` : undefined}
               />
+              {errors?.sellPrice && (
+                <p id={`po-row-${row.id}-sell-error`} className="ai-field-error mt-1 text-xs">
+                  {errors.sellPrice}
+                </p>
+              )}
             </div>
           </div>
         </>
@@ -286,7 +340,7 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
               onClick={() =>
                 onChange(row.id, {
                   inlineProductEnabled: false,
-                  productNameInput: formatProductName(row.inlineProductForm.name),
+                  productNameInput: trimEdgeWhitespace(row.inlineProductForm.name),
                 })
               }
               className="text-xs font-medium text-slate-600 hover:text-slate-800"
@@ -296,14 +350,17 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
           </div>
           <ProductFormFields
             value={row.inlineProductForm}
+            errors={errors?.inlineProductForm}
             onChange={(next) =>
-              // Stok awal produk inline PB selalu 0; penambahan stok berasal dari jumlah PB di baris ini.
-              onChange(row.id, {
-                inlineProductForm: { ...next, stockQty: '0' },
-                productNameInput: formatProductName(next.name),
-                buyPrice: next.costPrice,
-                sellPrice: next.sellPrice,
-              })
+              {
+                const normalizedInlineProductForm = uppercaseProductFormInput(next);
+                onChange(row.id, {
+                  inlineProductForm: normalizedInlineProductForm,
+                  productNameInput: trimEdgeWhitespace(normalizedInlineProductForm.name),
+                  buyPrice: normalizedInlineProductForm.costPrice,
+                  sellPrice: normalizedInlineProductForm.sellPrice,
+                });
+              }
             }
             idPrefix={`po-inline-${row.id}`}
           />
@@ -312,23 +369,33 @@ function PoRowEditor({ row, products, onChange, onRemove }: PoRowEditorProps) {
             <input
               type="text"
               inputMode="numeric"
-              className="ai-input w-full px-4 py-3"
+              className={getInputClassName(Boolean(errors?.qty))}
               value={row.qty}
               onChange={(e) => {
                 const { formatted } = handleFormattedInputChange(e.target.value);
                 onChange(row.id, { qty: formatted });
               }}
+              aria-invalid={Boolean(errors?.qty)}
+              aria-describedby={errors?.qty ? `po-row-${row.id}-qty-error-inline` : undefined}
             />
+            {errors?.qty && (
+              <p id={`po-row-${row.id}-qty-error-inline`} className="ai-field-error mt-1 text-xs">
+                {errors.qty}
+              </p>
+            )}
           </div>
-          <p className="mt-3 text-xs text-slate-500">
-            Catatan: Stok awal produk baru akan diatur 0, lalu stok ditambah lewat baris PB ini saat disimpan.
-          </p>
+          <p className="mt-3 text-xs text-slate-500">Stok akhir produk baru = Stok Awal + Jumlah PB pada baris ini.</p>
         </div>
       )}
 
       {selectedProduct && (
         <p className="rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
           Produk dipilih: {formatProductName(selectedProduct.name)} • Stok tersisa: {formatNumber(selectedProduct.stockQty)}
+        </p>
+      )}
+      {errors?.productNameInput && (
+        <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">
+          Item {rowIndex + 1}: {errors.productNameInput}
         </p>
       )}
 
@@ -347,6 +414,10 @@ export default function StockAdd() {
   const [poDraft, setPoDraft] = useState<PoDraftState>(() => makePoDraft());
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [isSavingPo, setIsSavingPo] = useState(false);
+  const [productFormErrors, setProductFormErrors] = useState<ProductFormFieldErrors>({});
+  const [poFormError, setPoFormError] = useState('');
+  const [poHeaderErrors, setPoHeaderErrors] = useState<PoHeaderErrors>({});
+  const [poRowErrors, setPoRowErrors] = useState<Record<string, PoRowFieldErrors>>({});
   const [draftHydrated, setDraftHydrated] = useState(false);
   const [hasAppliedProductPrefill, setHasAppliedProductPrefill] = useState(false);
   const { currentUser } = useAuth();
@@ -456,13 +527,38 @@ export default function StockAdd() {
   }, [searchParams, products, poDraft.rows, draftHydrated, hasAppliedProductPrefill, setSearchParams]);
 
   const setPoRow = (rowId: string, patch: Partial<PoDraftRow>) => {
+    setPoFormError('');
+    setPoHeaderErrors({});
+    setPoRowErrors((prev) => {
+      if (!prev[rowId]) return prev;
+      const next = { ...prev };
+      delete next[rowId];
+      return next;
+    });
+    const normalizedPatch: Partial<PoDraftRow> = {
+      ...patch,
+      ...(typeof patch.productNameInput === 'string'
+        ? { productNameInput: trimEdgeWhitespace(patch.productNameInput) }
+        : {}),
+      ...(patch.inlineProductForm
+        ? { inlineProductForm: uppercaseProductFormInput(patch.inlineProductForm) }
+        : {}),
+    };
     setPoDraft((prev) => ({
       ...prev,
-      rows: prev.rows.map((row) => (row.id === rowId ? { ...row, ...patch } : row)),
+      rows: prev.rows.map((row) => (row.id === rowId ? { ...row, ...normalizedPatch } : row)),
     }));
   };
 
   const removePoRow = (rowId: string) => {
+    setPoFormError('');
+    setPoHeaderErrors({});
+    setPoRowErrors((prev) => {
+      if (!prev[rowId]) return prev;
+      const next = { ...prev };
+      delete next[rowId];
+      return next;
+    });
     setPoDraft((prev) => ({
       ...prev,
       rows: prev.rows.filter((row) => row.id !== rowId).length > 0
@@ -472,6 +568,8 @@ export default function StockAdd() {
   };
 
   const addPoRow = () => {
+    setPoFormError('');
+    setPoHeaderErrors({});
     setPoDraft((prev) => ({
       ...prev,
       rows: [...prev.rows, makeRow()],
@@ -482,16 +580,17 @@ export default function StockAdd() {
     event.preventDefault();
     if (isSavingProduct) return;
 
-    const validationErrors = validateProductForm(productForm);
-    if (validationErrors.length > 0) {
-      alert(validationErrors[0]);
+    setProductFormErrors({});
+    const nextProductErrors = getProductFormFieldErrors(productForm);
+    if (Object.keys(nextProductErrors).length > 0) {
+      setProductFormErrors(nextProductErrors);
       return;
     }
 
     const normalized = normalizeProductForm(productForm);
     const duplicate = products.some((item) => toNameKey(item.name) === normalized.nameKey);
     if (duplicate) {
-      alert('Nama produk sudah ada. Gunakan nama lain.');
+      setProductFormErrors({ name: 'Nama produk sudah ada. Gunakan nama lain.' });
       return;
     }
 
@@ -544,13 +643,14 @@ export default function StockAdd() {
       });
 
       setProductForm({ ...DEFAULT_PRODUCT_FORM });
+      setProductFormErrors({});
       alert('Produk berhasil dibuat.');
     } catch (error) {
       if (error instanceof Error && error.message === 'DUPLICATE_PRODUCT_NAME') {
-        alert('Nama produk sudah terdaftar.');
+        setProductFormErrors({ name: 'Nama produk sudah terdaftar.' });
       } else {
         console.error(error);
-        alert('Gagal menyimpan produk.');
+        setProductFormErrors({ name: 'Gagal menyimpan produk.' });
       }
     } finally {
       setIsSavingProduct(false);
@@ -559,67 +659,90 @@ export default function StockAdd() {
 
   const handleSavePurchaseOrder = async () => {
     if (isSavingPo) return;
+    setPoFormError('');
+    setPoHeaderErrors({});
+    setPoRowErrors({});
 
-    if (!poDraft.receiptCode.trim()) {
-      alert('Kode Struk wajib diisi.');
-      return;
+    const nextHeaderErrors: PoHeaderErrors = {};
+    if (!poDraft.receiptCode.trim()) nextHeaderErrors.receiptCode = 'Kode Struk wajib diisi.';
+    if (!poDraft.receiptDate) nextHeaderErrors.receiptDate = 'Tanggal Struk wajib diisi.';
+    if (!poDraft.supplierName.trim()) nextHeaderErrors.supplierName = 'Nama Supplier wajib diisi.';
+    if (Object.keys(nextHeaderErrors).length > 0) {
+      setPoHeaderErrors(nextHeaderErrors);
     }
 
-    if (!poDraft.receiptDate) {
-      alert('Tanggal Struk wajib diisi.');
-      return;
-    }
-
-    if (!poDraft.supplierName.trim()) {
-      alert('Nama Supplier wajib diisi.');
-      return;
-    }
-
-    if (poDraft.rows.length === 0) {
-      alert('Minimal satu item PB wajib diisi.');
+    if (poDraft.rows.length === 0 && Object.keys(nextHeaderErrors).length === 0) {
+      setPoFormError('Minimal satu item PB wajib diisi.');
       return;
     }
 
     const existingNameKeys = new Set(products.map((item) => toNameKey(item.name)));
-    const inlineNameKeys = new Set<string>();
+    const inlineNameKeysByRow = new Map<string, string>();
+    const duplicateInlineNameRows = new Set<string>();
+    const nextPoRowErrors: Record<string, PoRowFieldErrors> = {};
 
     for (const row of poDraft.rows) {
+      const rowError: PoRowFieldErrors = {};
       const qty = parseNumber(row.qty);
       const buyPrice = parseNumber(row.inlineProductEnabled ? row.inlineProductForm.costPrice : row.buyPrice);
       const sellPrice = parseNumber(row.inlineProductEnabled ? row.inlineProductForm.sellPrice : row.sellPrice);
 
-      if (qty <= 0) {
-        alert('Jumlah item PB harus lebih dari 0.');
-        return;
-      }
-      if (buyPrice <= 0) {
-        alert('Harga Beli item PB harus lebih dari 0.');
-        return;
-      }
-      if (sellPrice <= 0) {
-        alert('Harga Jual item PB harus lebih dari 0.');
-        return;
-      }
+      if (!row.qty.trim()) rowError.qty = 'Jumlah item PB wajib diisi.';
+      else if (qty <= 0) rowError.qty = 'Jumlah item PB harus lebih dari 0.';
+      if (!(row.inlineProductEnabled ? row.inlineProductForm.costPrice : row.buyPrice).trim()) rowError.buyPrice = 'Harga Beli item PB wajib diisi.';
+      else if (buyPrice <= 0) rowError.buyPrice = 'Harga Beli item PB harus lebih dari 0.';
+      if (!(row.inlineProductEnabled ? row.inlineProductForm.sellPrice : row.sellPrice).trim()) rowError.sellPrice = 'Harga Jual item PB wajib diisi.';
+      else if (sellPrice <= 0) rowError.sellPrice = 'Harga Jual item PB harus lebih dari 0.';
 
       if (!row.selectedProductId && !row.inlineProductEnabled) {
-        alert('Pilih produk yang ada atau buat produk baru inline.');
-        return;
+        rowError.productNameInput = 'Pilih produk yang ada atau buat produk baru inline.';
       }
 
       if (row.inlineProductEnabled) {
-        const inlineErrors = validateProductForm(row.inlineProductForm);
-        if (inlineErrors.length > 0) {
-          alert(inlineErrors[0]);
-          return;
+        const inlineErrors = getProductFormFieldErrors(row.inlineProductForm);
+        if (Object.keys(inlineErrors).length > 0) {
+          rowError.inlineProductForm = inlineErrors;
         }
 
         const inlineNameKey = toNameKey(row.inlineProductForm.name);
-        if (existingNameKeys.has(inlineNameKey) || inlineNameKeys.has(inlineNameKey)) {
-          alert(`Produk "${row.inlineProductForm.name}" sudah ada. Pilih produk existing untuk baris ini.`);
-          return;
+        if (inlineNameKey) {
+          const existingRowId = inlineNameKeysByRow.get(inlineNameKey);
+          if (existingNameKeys.has(inlineNameKey)) {
+            rowError.inlineProductForm = {
+              ...rowError.inlineProductForm,
+              name: `Produk "${row.inlineProductForm.name}" sudah ada. Pilih produk existing untuk baris ini.`,
+            };
+          } else if (existingRowId) {
+            duplicateInlineNameRows.add(existingRowId);
+            duplicateInlineNameRows.add(row.id);
+          } else {
+            inlineNameKeysByRow.set(inlineNameKey, row.id);
+          }
         }
-        inlineNameKeys.add(inlineNameKey);
       }
+
+      if (Object.keys(rowError).length > 0) {
+        nextPoRowErrors[row.id] = rowError;
+      }
+    }
+
+    duplicateInlineNameRows.forEach((rowId) => {
+      const row = poDraft.rows.find((item) => item.id === rowId);
+      if (!row) return;
+      const existingRowError = nextPoRowErrors[rowId] || {};
+      nextPoRowErrors[rowId] = {
+        ...existingRowError,
+        inlineProductForm: {
+          ...existingRowError.inlineProductForm,
+          name: `Produk "${row.inlineProductForm.name}" terduplikasi di item PB lain. Gunakan nama berbeda.`,
+        },
+      };
+    });
+
+    if (Object.keys(nextHeaderErrors).length > 0 || Object.keys(nextPoRowErrors).length > 0) {
+      setPoHeaderErrors(nextHeaderErrors);
+      setPoRowErrors(nextPoRowErrors);
+      return;
     }
 
     setIsSavingPo(true);
@@ -655,6 +778,7 @@ export default function StockAdd() {
           productRef: DocumentReference;
           createProductPayload: ReturnType<typeof toProductDocument> | null;
           nameKeyRef: DocumentReference | null;
+          initialStockQty: number;
         }> = [];
 
         for (const row of poDraft.rows) {
@@ -667,12 +791,10 @@ export default function StockAdd() {
           let productRef: DocumentReference;
           let createProductPayload: ReturnType<typeof toProductDocument> | null = null;
           let nameKeyRef: DocumentReference | null = null;
+          let initialStockQty = 0;
 
           if (row.inlineProductEnabled) {
-            const normalized = normalizeProductForm({
-              ...row.inlineProductForm,
-              stockQty: '0',
-            });
+            const normalized = normalizeProductForm(row.inlineProductForm);
             nameKeyRef = doc(db, 'product_name_keys', normalized.nameKey);
             const existingName = await transaction.get(nameKeyRef);
 
@@ -683,11 +805,9 @@ export default function StockAdd() {
               productRef = doc(collection(db, 'products'));
               productId = productRef.id;
               productName = normalized.name;
-              createProductPayload = toProductDocument({
-                ...normalized,
-                stockQty: 0,
-              });
-              productStockCache.set(productId, 0);
+              initialStockQty = normalized.stockQty;
+              createProductPayload = toProductDocument(normalized);
+              productStockCache.set(productId, normalized.stockQty);
             }
           } else {
             productRef = doc(db, 'products', productId);
@@ -714,6 +834,7 @@ export default function StockAdd() {
             productRef,
             createProductPayload,
             nameKeyRef,
+            initialStockQty,
           });
         }
 
@@ -727,6 +848,7 @@ export default function StockAdd() {
             productRef,
             createProductPayload,
             nameKeyRef,
+            initialStockQty,
           } = row;
 
           if (createProductPayload) {
@@ -737,6 +859,36 @@ export default function StockAdd() {
               productId,
               name: productName,
               createdAt: serverTimestamp(),
+            });
+          }
+
+          if (createProductPayload && initialStockQty > 0) {
+            const initialLayerRef = doc(collection(db, 'inventory_layers'));
+            const initialMovementRef = doc(collection(db, 'stock_movements'));
+
+            transaction.set(initialLayerRef, {
+              productId,
+              quantityReceived: initialStockQty,
+              quantityRemaining: initialStockQty,
+              unitCost,
+              sellPriceSnapshot: sellPrice,
+              sourceType: 'initial_stock',
+              sourceId: productId,
+              receivedAt: serverTimestamp(),
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+
+            transaction.set(initialMovementRef, {
+              productId,
+              type: 'stock_in',
+              quantityChange: initialStockQty,
+              unitCost,
+              layerId: initialLayerRef.id,
+              referenceId: productId,
+              referenceType: 'initial_stock',
+              performedBy: currentUser?.uid || 'unknown',
+              performedAt: serverTimestamp(),
             });
           }
 
@@ -896,7 +1048,15 @@ export default function StockAdd() {
       {tab === 'product' && (
         <section className="ai-card mt-4 p-5">
           <form onSubmit={handleSaveProduct} className="space-y-4">
-            <ProductFormFields value={productForm} onChange={setProductForm} idPrefix="new-product" />
+            <ProductFormFields
+              value={productForm}
+              errors={productFormErrors}
+              onChange={(next) => {
+                setProductFormErrors({});
+                setProductForm(uppercaseProductFormInput(next));
+              }}
+              idPrefix="new-product"
+            />
             <button
               type="submit"
               disabled={isSavingProduct}
@@ -916,31 +1076,64 @@ export default function StockAdd() {
               <label className="mb-1 block text-sm font-medium text-slate-700">Kode Struk *</label>
               <input
                 type="text"
-                className="ai-input w-full px-4 py-3"
+                className={`ai-input w-full px-4 py-3 transition-colors duration-200 ${poHeaderErrors.receiptCode ? 'ai-input-error' : ''}`}
                 value={poDraft.receiptCode}
-                onChange={(e) => setPoDraft((prev) => ({ ...prev, receiptCode: e.target.value }))}
+                onChange={(e) => {
+                  setPoFormError('');
+                  setPoHeaderErrors((prev) => ({ ...prev, receiptCode: undefined }));
+                  setPoDraft((prev) => ({ ...prev, receiptCode: uppercaseInputValue(e.target.value) }));
+                }}
                 placeholder="Contoh: STRUK-PB-001"
+                aria-invalid={Boolean(poHeaderErrors.receiptCode)}
+                aria-describedby={poHeaderErrors.receiptCode ? 'pb-receipt-code-error' : undefined}
               />
+              {poHeaderErrors.receiptCode && (
+                <p id="pb-receipt-code-error" className="ai-field-error mt-1 text-xs">
+                  {poHeaderErrors.receiptCode}
+                </p>
+              )}
             </div>
             <div className="grid gap-4 md:grid-cols-2">
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">Tanggal Struk *</label>
                 <input
                   type="date"
-                  className="ai-input w-full px-4 py-3"
+                  className={`ai-input w-full px-4 py-3 transition-colors duration-200 ${poHeaderErrors.receiptDate ? 'ai-input-error' : ''}`}
                   value={poDraft.receiptDate}
-                  onChange={(e) => setPoDraft((prev) => ({ ...prev, receiptDate: e.target.value }))}
+                  onChange={(e) => {
+                    setPoFormError('');
+                    setPoHeaderErrors((prev) => ({ ...prev, receiptDate: undefined }));
+                    setPoDraft((prev) => ({ ...prev, receiptDate: e.target.value }));
+                  }}
+                  aria-invalid={Boolean(poHeaderErrors.receiptDate)}
+                  aria-describedby={poHeaderErrors.receiptDate ? 'pb-receipt-date-error' : undefined}
                 />
+                {poHeaderErrors.receiptDate && (
+                  <p id="pb-receipt-date-error" className="ai-field-error mt-1 text-xs">
+                    {poHeaderErrors.receiptDate}
+                  </p>
+                )}
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">Nama Supplier *</label>
                 <input
                   type="text"
-                  className="ai-input w-full px-4 py-3"
+                  className={`ai-input w-full px-4 py-3 transition-colors duration-200 ${poHeaderErrors.supplierName ? 'ai-input-error' : ''}`}
                   value={poDraft.supplierName}
-                  onChange={(e) => setPoDraft((prev) => ({ ...prev, supplierName: e.target.value }))}
+                  onChange={(e) => {
+                    setPoFormError('');
+                    setPoHeaderErrors((prev) => ({ ...prev, supplierName: undefined }));
+                  setPoDraft((prev) => ({ ...prev, supplierName: uppercaseInputValue(e.target.value) }));
+                  }}
                   placeholder="Contoh: PT Sumber Jaya"
+                  aria-invalid={Boolean(poHeaderErrors.supplierName)}
+                  aria-describedby={poHeaderErrors.supplierName ? 'pb-supplier-name-error' : undefined}
                 />
+                {poHeaderErrors.supplierName && (
+                  <p id="pb-supplier-name-error" className="ai-field-error mt-1 text-xs">
+                    {poHeaderErrors.supplierName}
+                  </p>
+                )}
               </div>
             </div>
             <div>
@@ -948,21 +1141,28 @@ export default function StockAdd() {
               <textarea
                 className="ai-input min-h-24 w-full px-4 py-3"
                 value={poDraft.note}
-                onChange={(e) => setPoDraft((prev) => ({ ...prev, note: e.target.value }))}
+                onChange={(e) => setPoDraft((prev) => ({ ...prev, note: uppercaseInputValue(e.target.value) }))}
                 placeholder="Opsional"
               />
             </div>
           </div>
 
-          {poDraft.rows.map((row) => (
+          {poDraft.rows.map((row, index) => (
             <PoRowEditor
               key={row.id}
               row={row}
+              rowIndex={index}
+              errors={poRowErrors[row.id]}
               products={products}
               onChange={setPoRow}
               onRemove={removePoRow}
             />
           ))}
+          {poFormError && (
+            <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+              {poFormError}
+            </p>
+          )}
 
           <button
             type="button"

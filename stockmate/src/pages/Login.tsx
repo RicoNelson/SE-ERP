@@ -11,6 +11,7 @@ export default function Login() {
   const [otp, setOtp] = useState('');
   const [step, setStep] = useState<'phone' | 'otp'>('phone');
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<{ phone?: string; otp?: string }>({});
   const [loading, setLoading] = useState(false);
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [sendCodeCooldownSec, setSendCodeCooldownSec] = useState(0);
@@ -126,8 +127,13 @@ export default function Login() {
 
   const handleSendCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!phoneNumber) {
-      setError('Masukkan nomor HP');
+    setError('');
+    const nextFieldErrors: { phone?: string } = {};
+    if (!phoneNumber.trim()) {
+      nextFieldErrors.phone = 'Nomor HP wajib diisi.';
+    }
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
       return;
     }
     if (sendCodeCooldownSec > 0) {
@@ -136,6 +142,7 @@ export default function Login() {
     }
 
     setError('');
+    setFieldErrors({});
     setLoading(true);
 
     try {
@@ -167,14 +174,22 @@ export default function Login() {
 
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (otp.length !== 6) {
-      setError('Kode harus 6 digit');
+    setError('');
+    const nextFieldErrors: { otp?: string } = {};
+    if (!otp.trim()) {
+      nextFieldErrors.otp = 'Kode OTP wajib diisi.';
+    } else if (otp.length !== 6) {
+      nextFieldErrors.otp = 'Kode OTP harus 6 digit.';
+    }
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
       return;
     }
 
     if (!confirmationResult) return;
 
     setError('');
+    setFieldErrors({});
     setLoading(true);
 
     try {
@@ -226,12 +241,22 @@ export default function Login() {
                   id="phone"
                   type="tel"
                   placeholder="812 3456 7890"
-                  className="ai-input w-full py-3 pl-12 pr-4"
+                  className={`ai-input w-full py-3 pl-12 pr-4 transition-colors duration-200 ${fieldErrors.phone ? 'ai-input-error' : ''}`}
                   value={phoneNumber}
-                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  onChange={(e) => {
+                    setPhoneNumber(e.target.value);
+                    setFieldErrors((prev) => ({ ...prev, phone: undefined }));
+                  }}
                   disabled={loading}
+                  aria-invalid={Boolean(fieldErrors.phone)}
+                  aria-describedby={fieldErrors.phone ? 'phone-error' : undefined}
                 />
               </div>
+              {fieldErrors.phone && (
+                <p id="phone-error" className="ai-field-error mt-1 text-xs">
+                  {fieldErrors.phone}
+                </p>
+              )}
             </div>
 
             {error && <p className="rounded-2xl border border-rose-300/30 bg-rose-50 px-4 py-3 text-sm text-rose-600">{error}</p>}
@@ -259,11 +284,21 @@ export default function Login() {
                 type="number"
                 placeholder="123456"
                 maxLength={6}
-                className="ai-input w-full px-4 py-3 text-center text-lg font-bold tracking-[0.45em]"
+                className={`ai-input w-full px-4 py-3 text-center text-lg font-bold tracking-[0.45em] transition-colors duration-200 ${fieldErrors.otp ? 'ai-input-error' : ''}`}
                 value={otp}
-                onChange={(e) => setOtp(e.target.value.slice(0, 6))}
+                onChange={(e) => {
+                  setOtp(e.target.value.slice(0, 6));
+                  setFieldErrors((prev) => ({ ...prev, otp: undefined }));
+                }}
                 disabled={loading}
+                aria-invalid={Boolean(fieldErrors.otp)}
+                aria-describedby={fieldErrors.otp ? 'otp-error' : undefined}
               />
+              {fieldErrors.otp && (
+                <p id="otp-error" className="ai-field-error mt-1 text-xs">
+                  {fieldErrors.otp}
+                </p>
+              )}
             </div>
 
             {error && <p className="rounded-2xl border border-rose-300/30 bg-rose-50 px-4 py-3 text-sm text-rose-600">{error}</p>}
@@ -278,7 +313,11 @@ export default function Login() {
 
             <button 
               type="button"
-              onClick={() => setStep('phone')}
+              onClick={() => {
+                setStep('phone');
+                setError('');
+                setFieldErrors({});
+              }}
               className="ai-button-ghost mt-2 w-full px-4 py-3 text-sm font-medium"
               disabled={loading}
             >

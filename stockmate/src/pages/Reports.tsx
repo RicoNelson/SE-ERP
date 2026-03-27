@@ -135,6 +135,7 @@ export default function Reports() {
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseNote, setExpenseNote] = useState('');
   const [isSavingExpense, setIsSavingExpense] = useState(false);
+  const [expenseFieldErrors, setExpenseFieldErrors] = useState<{ expenseCategory?: string; expenseAmount?: string }>({});
   const [loading, setLoading] = useState(true);
   const { currentUser } = useAuth();
 
@@ -306,9 +307,20 @@ export default function Reports() {
     }
   };
 
-  const handleSaveExpense = async () => {
+  const handleSaveExpense = async (event?: React.FormEvent) => {
+    event?.preventDefault();
     const amount = parseNumber(expenseAmount);
-    if (amount <= 0 || !expenseCategory || isSavingExpense) return;
+    if (isSavingExpense) return;
+
+    const nextFieldErrors: { expenseCategory?: string; expenseAmount?: string } = {};
+    if (!expenseCategory.trim()) nextFieldErrors.expenseCategory = 'Kategori biaya wajib dipilih.';
+    if (!expenseAmount.trim()) nextFieldErrors.expenseAmount = 'Nominal biaya wajib diisi.';
+    else if (amount <= 0) nextFieldErrors.expenseAmount = 'Nominal biaya harus lebih dari 0.';
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setExpenseFieldErrors(nextFieldErrors);
+      return;
+    }
+    setExpenseFieldErrors({});
 
     setIsSavingExpense(true);
     try {
@@ -322,6 +334,7 @@ export default function Reports() {
       });
       setExpenseAmount('');
       setExpenseNote('');
+      setExpenseFieldErrors({});
     } catch (error) {
       console.error('Error saving expense:', error);
       alert('Gagal menyimpan biaya. Silakan coba lagi.');
@@ -610,56 +623,76 @@ export default function Reports() {
           <span className="text-sm font-semibold text-slate-500">Rp {formatNumber(totalExpenses)}</span>
         </div>
         <div className="ai-card p-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Kategori</label>
-              <div className="relative">
-                <select
-                  value={expenseCategory}
-                  onChange={(e) => setExpenseCategory(e.target.value)}
-                  className="ai-select w-full appearance-none py-3 pl-4 pr-10 font-medium"
-                >
-                  {EXPENSE_CATEGORIES.map((category) => (
-                    <option key={category} value={category}>{category}</option>
-                  ))}
-                </select>
+          <form onSubmit={handleSaveExpense}>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Kategori</label>
+                <div className="relative">
+                  <select
+                    value={expenseCategory}
+                    onChange={(e) => {
+                      setExpenseCategory(e.target.value);
+                      setExpenseFieldErrors((prev) => ({ ...prev, expenseCategory: undefined }));
+                    }}
+                    className={`ai-select w-full appearance-none py-3 pl-4 pr-10 font-medium transition-colors duration-200 ${expenseFieldErrors.expenseCategory ? 'ai-select-error' : ''}`}
+                    aria-invalid={Boolean(expenseFieldErrors.expenseCategory)}
+                    aria-describedby={expenseFieldErrors.expenseCategory ? 'expense-category-error' : undefined}
+                  >
+                    {EXPENSE_CATEGORIES.map((category) => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                  </select>
+                </div>
+                {expenseFieldErrors.expenseCategory && (
+                  <p id="expense-category-error" className="ai-field-error mt-1 text-xs">
+                    {expenseFieldErrors.expenseCategory}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Nominal</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={expenseAmount}
+                  onChange={(e) => {
+                    const { formatted } = handleFormattedInputChange(e.target.value);
+                    setExpenseAmount(formatted);
+                    setExpenseFieldErrors((prev) => ({ ...prev, expenseAmount: undefined }));
+                  }}
+                  className={`ai-input w-full px-4 py-3 transition-colors duration-200 ${expenseFieldErrors.expenseAmount ? 'ai-input-error' : ''}`}
+                  placeholder="Contoh: 35.000"
+                  aria-invalid={Boolean(expenseFieldErrors.expenseAmount)}
+                  aria-describedby={expenseFieldErrors.expenseAmount ? 'expense-amount-error' : undefined}
+                />
+                {expenseFieldErrors.expenseAmount && (
+                  <p id="expense-amount-error" className="ai-field-error mt-1 text-xs">
+                    {expenseFieldErrors.expenseAmount}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Catatan</label>
+                <input
+                  type="text"
+                  value={expenseNote}
+                  onChange={(e) => setExpenseNote(e.target.value)}
+                  className="ai-input w-full px-4 py-3"
+                  placeholder="Opsional"
+                />
               </div>
             </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Nominal</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={expenseAmount}
-                onChange={(e) => {
-                  const { formatted } = handleFormattedInputChange(e.target.value);
-                  setExpenseAmount(formatted);
-                }}
-                className="ai-input w-full py-3 px-4"
-                placeholder="Contoh: 35.000"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Catatan</label>
-              <input
-                type="text"
-                value={expenseNote}
-                onChange={(e) => setExpenseNote(e.target.value)}
-                className="ai-input w-full py-3 px-4"
-                placeholder="Opsional"
-              />
-            </div>
-          </div>
 
-          <div className="mt-3 flex justify-end">
-            <button
-              onClick={handleSaveExpense}
-              disabled={parseNumber(expenseAmount) <= 0 || isSavingExpense}
-              className="rounded-lg border border-sky-600 bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isSavingExpense ? 'Menyimpan...' : 'Simpan Biaya'}
-            </button>
-          </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                type="submit"
+                disabled={isSavingExpense}
+                className="rounded-lg border border-sky-600 bg-sky-500 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSavingExpense ? 'Menyimpan...' : 'Simpan Biaya'}
+              </button>
+            </div>
+          </form>
 
           <div className="ai-divider my-4" />
 

@@ -16,6 +16,8 @@ export default function Users() {
   const [newName, setNewName] = useState('');
   const [newRole, setNewRole] = useState<'owner' | 'staff'>('staff');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [addUserError, setAddUserError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<{ newName?: string; newPhone?: string }>({});
 
   useEffect(() => {
     if (userProfile?.role !== 'owner') return;
@@ -35,10 +37,21 @@ export default function Users() {
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newPhone.startsWith('+62')) {
-      alert('Nomor telepon harus diawali dengan +62');
+    setAddUserError('');
+    const nextFieldErrors: { newName?: string; newPhone?: string } = {};
+    if (!newName.trim()) {
+      nextFieldErrors.newName = 'Nama lengkap wajib diisi.';
+    }
+    if (!newPhone.trim()) {
+      nextFieldErrors.newPhone = 'Nomor telepon wajib diisi.';
+    } else if (!newPhone.startsWith('+62')) {
+      nextFieldErrors.newPhone = 'Nomor telepon harus diawali dengan +62.';
+    }
+    if (Object.keys(nextFieldErrors).length > 0) {
+      setFieldErrors(nextFieldErrors);
       return;
     }
+    setFieldErrors({});
 
     setIsProcessing(true);
     try {
@@ -54,10 +67,12 @@ export default function Users() {
       setNewPhone('');
       setNewName('');
       setNewRole('staff');
+      setAddUserError('');
+      setFieldErrors({});
       setIsAddModalOpen(false);
     } catch (error) {
       console.error("Error adding user:", error);
-      alert('Gagal menambahkan pengguna.');
+      setAddUserError('Gagal menambahkan pengguna.');
     } finally {
       setIsProcessing(false);
     }
@@ -108,7 +123,11 @@ export default function Users() {
 
       <div className="mt-4 flex items-center justify-end">
         <button 
-          onClick={() => setIsAddModalOpen(true)}
+          onClick={() => {
+            setAddUserError('');
+            setFieldErrors({});
+            setIsAddModalOpen(true);
+          }}
           className="ai-button inline-flex items-center gap-2 px-4 py-3"
         >
           <UserPlus className="h-5 w-5" />
@@ -154,11 +173,25 @@ export default function Users() {
 
       {isAddModalOpen && (
         <div className="ai-modal-shell">
-          <div className="ai-modal-backdrop" onClick={() => setIsAddModalOpen(false)} />
+          <div
+            className="ai-modal-backdrop"
+            onClick={() => {
+              setAddUserError('');
+              setFieldErrors({});
+              setIsAddModalOpen(false);
+            }}
+          />
           <div className="ai-modal-panel page-enter translate-y-0 scale-100">
             <div className="flex items-center justify-between p-4">
               <h2 className="text-lg font-bold text-slate-900">Tambah Pegawai Baru</h2>
-              <button onClick={() => setIsAddModalOpen(false)} className="ai-button-ghost rounded-full p-2 text-slate-600">
+              <button
+                onClick={() => {
+                  setAddUserError('');
+                  setFieldErrors({});
+                  setIsAddModalOpen(false);
+                }}
+                className="ai-button-ghost rounded-full p-2 text-slate-600"
+              >
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -171,10 +204,21 @@ export default function Users() {
                   required
                   type="text"
                   placeholder="Misal: Budi Santoso"
-                  className="ai-input w-full px-4 py-3"
                   value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
+                  onChange={(e) => {
+                    setAddUserError('');
+                    setFieldErrors((prev) => ({ ...prev, newName: undefined }));
+                    setNewName(e.target.value);
+                  }}
+                  className={`ai-input w-full px-4 py-3 transition-colors duration-200 ${fieldErrors.newName ? 'ai-input-error' : ''}`}
+                  aria-invalid={Boolean(fieldErrors.newName)}
+                  aria-describedby={fieldErrors.newName ? 'add-user-name-error' : undefined}
                 />
+                {fieldErrors.newName && (
+                  <p id="add-user-name-error" className="ai-field-error mt-1 text-xs">
+                    {fieldErrors.newName}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -183,16 +227,31 @@ export default function Users() {
                   required
                   type="tel"
                   placeholder="+628123456789"
-                  className="ai-input w-full px-4 py-3"
                   value={newPhone}
                   onChange={(e) => {
+                    setAddUserError('');
+                    setFieldErrors((prev) => ({ ...prev, newPhone: undefined }));
                     let val = e.target.value;
                     if (val.startsWith('0')) val = '+62' + val.substring(1);
                     setNewPhone(val);
                   }}
+                  className={`ai-input w-full px-4 py-3 transition-colors duration-200 ${fieldErrors.newPhone ? 'ai-input-error' : ''}`}
+                  aria-invalid={Boolean(fieldErrors.newPhone)}
+                  aria-describedby={fieldErrors.newPhone ? 'add-user-phone-error' : undefined}
                 />
-                <p className="mt-1 text-xs text-slate-500">Pastikan diawali dengan +62</p>
+                {fieldErrors.newPhone ? (
+                  <p id="add-user-phone-error" className="ai-field-error mt-1 text-xs">
+                    {fieldErrors.newPhone}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-500">Pastikan diawali dengan +62</p>
+                )}
               </div>
+              {addUserError && (
+                <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+                  {addUserError}
+                </p>
+              )}
 
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700">Peran Akses</label>

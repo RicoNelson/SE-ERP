@@ -12,6 +12,11 @@ interface CartItem extends Product {
   cartPrice: string; // Allow editing sell price
 }
 
+interface SaleRowErrors {
+  cartQuantity?: string;
+  cartPrice?: string;
+}
+
 const PAYMENT_METHODS = [
   'QRIS',
   'ShopeePay Later',
@@ -27,6 +32,8 @@ export default function Sell() {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<string>('QRIS');
+  const [saleFormError, setSaleFormError] = useState('');
+  const [saleRowErrors, setSaleRowErrors] = useState<Record<string, SaleRowErrors>>({});
   const { currentUser } = useAuth();
 
   // Calculate total
@@ -36,6 +43,11 @@ export default function Sell() {
 
   const handleQuantityChange = (id: string, value: string) => {
     const { formatted } = handleFormattedInputChange(value);
+    setSaleFormError('');
+    setSaleRowErrors((prev) => {
+      if (!prev[id]?.cartQuantity) return prev;
+      return { ...prev, [id]: { ...prev[id], cartQuantity: undefined } };
+    });
     
     setCart(cart.map(item => 
       item.id === id ? { ...item, cartQuantity: formatted } : item
@@ -44,6 +56,11 @@ export default function Sell() {
 
   const handlePriceChange = (id: string, value: string) => {
     const { formatted } = handleFormattedInputChange(value);
+    setSaleFormError('');
+    setSaleRowErrors((prev) => {
+      if (!prev[id]?.cartPrice) return prev;
+      return { ...prev, [id]: { ...prev[id], cartPrice: undefined } };
+    });
     setCart(cart.map((item) =>
       item.id === id ? { ...item, cartPrice: formatted } : item,
     ));
@@ -78,10 +95,24 @@ export default function Sell() {
   };
 
   const removeFromCart = (id: string) => {
+    setSaleFormError('');
+    setSaleRowErrors((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     setCart(cart.filter(item => item.id !== id));
   };
 
   const handleAddProduct = async (product: Product) => {
+    setSaleFormError('');
+    setSaleRowErrors((prev) => {
+      if (!product.id || !prev[product.id]) return prev;
+      const next = { ...prev };
+      delete next[product.id];
+      return next;
+    });
     // Check if already in cart
     const existing = cart.find(item => item.id === product.id);
     if (existing) {
@@ -101,6 +132,8 @@ export default function Sell() {
 
   const handleConfirmSale = async () => {
     if (cart.length === 0 || isProcessing) return;
+    setSaleFormError('');
+    setSaleRowErrors({});
 
     const cartWithParsedQty = cart.map((item) => ({
       ...item,
@@ -108,15 +141,20 @@ export default function Sell() {
       parsedUnitPrice: parseNumber(item.cartPrice),
     }));
 
-    const hasInvalidQty = cartWithParsedQty.some((item) => item.parsedQuantity <= 0);
-    if (hasInvalidQty) {
-      alert('Jumlah produk harus lebih dari 0.');
-      return;
-    }
-
-    const hasInvalidPrice = cartWithParsedQty.some((item) => item.parsedUnitPrice <= 0);
-    if (hasInvalidPrice) {
-      alert('Harga jual harus lebih dari 0.');
+    const nextRowErrors: Record<string, SaleRowErrors> = {};
+    cartWithParsedQty.forEach((item) => {
+      const rowError: SaleRowErrors = {};
+      if (!item.cartQuantity.trim()) rowError.cartQuantity = 'Jumlah terjual wajib diisi.';
+      else if (item.parsedQuantity <= 0) rowError.cartQuantity = 'Jumlah terjual harus lebih dari 0.';
+      if (!item.cartPrice.trim()) rowError.cartPrice = 'Harga jual wajib diisi.';
+      else if (item.parsedUnitPrice <= 0) rowError.cartPrice = 'Harga jual harus lebih dari 0.';
+      if (Object.keys(rowError).length > 0) {
+        nextRowErrors[item.id!] = rowError;
+      }
+    });
+    if (Object.keys(nextRowErrors).length > 0) {
+      setSaleRowErrors(nextRowErrors);
+      setSaleFormError('Lengkapi semua field wajib yang ditandai merah.');
       return;
     }
 
@@ -312,6 +350,8 @@ export default function Sell() {
       });
 
       setCart([]);
+      setSaleFormError('');
+      setSaleRowErrors({});
       alert('Penjualan berhasil dicatat dengan metode FIFO dan stok telah dikurangi.');
 
     } catch (error) {
@@ -409,12 +449,19 @@ export default function Sell() {
                         <input
                           type="text"
                           inputMode="numeric"
-                          className="ai-input flex-1 px-3 py-2.5 text-base font-semibold text-slate-900"
+                          className={`ai-input flex-1 px-3 py-2.5 text-base font-semibold text-slate-900 transition-colors duration-200 ${saleRowErrors[item.id!]?.cartPrice ? 'ai-input-error' : ''}`}
                           value={item.cartPrice}
                           onChange={(e) => handlePriceChange(item.id!, e.target.value)}
+                          aria-invalid={Boolean(saleRowErrors[item.id!]?.cartPrice)}
+                          aria-describedby={saleRowErrors[item.id!]?.cartPrice ? `sell-price-error-${item.id}` : undefined}
                         />
                         <Edit3 className="h-4 w-4 text-slate-500" />
                       </div>
+                      {saleRowErrors[item.id!]?.cartPrice && (
+                        <p id={`sell-price-error-${item.id}`} className="ai-field-error mt-1 text-xs">
+                          {saleRowErrors[item.id!]?.cartPrice}
+                        </p>
+                      )}
                     </div>
 
                     <div className="ai-panel-muted flex items-center justify-between rounded-2xl p-3">
@@ -424,11 +471,18 @@ export default function Sell() {
                       <input
                         type="text"
                         inputMode="numeric"
-                        className="ai-input w-28 px-3 py-2.5 text-center text-lg font-bold"
+                        className={`ai-input w-28 px-3 py-2.5 text-center text-lg font-bold transition-colors duration-200 ${saleRowErrors[item.id!]?.cartQuantity ? 'ai-input-error' : ''}`}
                         value={item.cartQuantity}
                         onChange={(e) => handleQuantityChange(item.id!, e.target.value)}
+                        aria-invalid={Boolean(saleRowErrors[item.id!]?.cartQuantity)}
+                        aria-describedby={saleRowErrors[item.id!]?.cartQuantity ? `sell-qty-error-${item.id}` : undefined}
                       />
                     </div>
+                    {saleRowErrors[item.id!]?.cartQuantity && (
+                      <p id={`sell-qty-error-${item.id}`} className="ai-field-error text-xs">
+                        {saleRowErrors[item.id!]?.cartQuantity}
+                      </p>
+                    )}
                   </div>
                 </div>
               ))
@@ -469,25 +523,32 @@ export default function Sell() {
         </section>
 
         <div className="fixed bottom-[98px] left-0 right-0 z-10 px-4">
-          <div className="glass-panel-strong mx-auto flex max-w-6xl items-center justify-between gap-3 rounded-lg border-slate-200 bg-white px-3 py-2.5">
-            <div className="min-w-0">
-              <p className="ai-heading text-[1.9rem] font-bold leading-none text-slate-900">Rp {formatNumber(total)}</p>
-              <p className="mt-1 text-sm font-medium text-slate-500">Total Tagihan</p>
+          <div className="glass-panel-strong mx-auto max-w-6xl rounded-lg border-slate-200 bg-white px-3 py-2.5">
+            {saleFormError && (
+              <p className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">
+                {saleFormError}
+              </p>
+            )}
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="ai-heading text-[1.9rem] font-bold leading-none text-slate-900">Rp {formatNumber(total)}</p>
+                <p className="mt-1 text-sm font-medium text-slate-500">Total Tagihan</p>
+              </div>
+              <button
+                onClick={handleConfirmSale}
+                disabled={cart.length === 0 || total === 0 || isProcessing}
+                className="ai-button min-w-[160px] rounded-lg border border-emerald-600 bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isProcessing ? (
+                  <span className="flex items-center gap-2">
+                    <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/70 border-t-transparent"></span>
+                    MEMPROSES...
+                  </span>
+                ) : (
+                  'KONFIRMASI PENJUALAN'
+                )}
+              </button>
             </div>
-            <button
-              onClick={handleConfirmSale}
-              disabled={cart.length === 0 || total === 0 || isProcessing}
-              className="ai-button min-w-[160px] rounded-lg border border-emerald-600 bg-emerald-500 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isProcessing ? (
-                <span className="flex items-center gap-2">
-                  <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/70 border-t-transparent"></span>
-                  MEMPROSES...
-                </span>
-              ) : (
-                'KONFIRMASI PENJUALAN'
-              )}
-            </button>
           </div>
         </div>
       </div>

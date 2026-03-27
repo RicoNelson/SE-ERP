@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Search, ChevronLeft, Plus } from 'lucide-react';
+import { Search, ChevronLeft, ChevronDown, Plus } from 'lucide-react';
 import type { Product } from '../types';
 import { formatNumber, formatProductName, normalizeSearchQuery } from '../utils/format';
 
@@ -15,6 +15,8 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [productsPerPage, setProductsPerPage] = useState(10);
 
   const [isVisible, setIsVisible] = useState(isOpen);
   const [shouldRender, setShouldRender] = useState(isOpen);
@@ -55,6 +57,19 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
     normalizeSearchQuery(p.name).includes(normalizedSearch) ||
     normalizeSearchQuery(p.sku).includes(normalizedSearch),
   );
+  const totalPages = Math.max(1, Math.ceil(filteredProducts.length / productsPerPage));
+  const startIndex = (currentPage - 1) * productsPerPage;
+  const paginatedProducts = filteredProducts.slice(startIndex, startIndex + productsPerPage);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, productsPerPage, isOpen]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   return (
     <div className={`fixed inset-0 z-50 flex flex-col bg-[linear-gradient(180deg,rgba(248,251,255,0.96),rgba(243,248,255,0.99))] transition-all duration-300 ${isVisible ? 'visible translate-y-0 opacity-100' : 'invisible translate-y-8 opacity-0'}`}>
@@ -79,6 +94,26 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="grid grid-cols-[1fr_auto] gap-2">
+          <div className="relative">
+            <select
+              value={productsPerPage}
+              onChange={(e) => setProductsPerPage(Number(e.target.value))}
+              className="ai-select w-full appearance-none py-2.5 pl-4 pr-10 text-sm font-medium"
+            >
+              <option value={10}>10 produk / halaman</option>
+              <option value={20}>20 produk / halaman</option>
+              <option value={50}>50 produk / halaman</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+              <ChevronDown className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="inline-flex items-center justify-center rounded-full border border-slate-200 px-3 text-xs font-semibold text-slate-600">
+            Total: {filteredProducts.length}
+          </div>
+        </div>
+
         {loading ? (
           <p className="py-8 text-center text-slate-400">Memuat produk...</p>
         ) : filteredProducts.length === 0 ? (
@@ -87,7 +122,7 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
             <p className="mt-1 text-sm text-slate-500">Coba cari berdasarkan nama atau SKU yang berbeda.</p>
           </div>
         ) : (
-          filteredProducts.map((product, index) => {
+          paginatedProducts.map((product, index) => {
             const isLowStock = product.stockQty <= product.lowStockThreshold;
             const isOutOfStock = product.stockQty === 0;
 
@@ -113,6 +148,28 @@ export default function ProductSearchModal({ isOpen, onClose, onAddProduct }: Pr
               </div>
             );
           })
+        )}
+
+        {!loading && filteredProducts.length > 0 && (
+          <div className="mt-1 flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-3 py-2.5">
+            <button
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+              className="ai-button-ghost px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Sebelumnya
+            </button>
+            <p className="text-sm font-medium text-slate-600">
+              Halaman {currentPage} / {totalPages}
+            </p>
+            <button
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+              className="ai-button-ghost px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Berikutnya
+            </button>
+          </div>
         )}
       </div>
     </div>

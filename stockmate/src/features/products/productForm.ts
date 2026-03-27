@@ -21,6 +21,14 @@ export interface NormalizedProductInput {
   lowStockThreshold: number;
 }
 
+export interface ProductFormFieldErrors {
+  name?: string;
+  costPrice?: string;
+  sellPrice?: string;
+  stockQty?: string;
+  lowStockThreshold?: string;
+}
+
 export const DEFAULT_PRODUCT_FORM: ProductFormData = {
   name: '',
   sku: '',
@@ -44,14 +52,19 @@ export const normalizeProductForm = (form: ProductFormData): NormalizedProductIn
 });
 
 export const validateProductForm = (form: ProductFormData): string[] => {
-  const normalized = normalizeProductForm(form);
-  const errors: string[] = [];
+  const fieldErrors = getProductFormFieldErrors(form);
+  return Object.values(fieldErrors);
+};
 
-  if (!normalized.name) errors.push('Nama produk wajib diisi.');
-  if (normalized.costPrice <= 0) errors.push('Harga beli produk harus lebih dari 0.');
-  if (normalized.sellPrice <= 0) errors.push('Harga jual produk harus lebih dari 0.');
-  if (normalized.stockQty < 0) errors.push('Stok awal tidak boleh negatif.');
-  if (normalized.lowStockThreshold < 0) errors.push('Batas menipis tidak boleh negatif.');
+export const getProductFormFieldErrors = (form: ProductFormData): ProductFormFieldErrors => {
+  const normalized = normalizeProductForm(form);
+  const errors: ProductFormFieldErrors = {};
+
+  if (!normalized.name) errors.name = 'Nama produk wajib diisi.';
+  if (normalized.costPrice <= 0) errors.costPrice = 'Harga beli produk harus lebih dari 0.';
+  if (normalized.sellPrice <= 0) errors.sellPrice = 'Harga jual produk harus lebih dari 0.';
+  if (normalized.stockQty < 0) errors.stockQty = 'Stok awal tidak boleh negatif.';
+  if (normalized.lowStockThreshold < 0) errors.lowStockThreshold = 'Batas menipis tidak boleh negatif.';
 
   return errors;
 };

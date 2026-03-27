@@ -376,6 +376,7 @@ textarea {
   background: rgba(255, 255, 255, 0.86);
   color: var(--text-1);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
 .ai-input::placeholder {
@@ -389,6 +390,25 @@ textarea {
   box-shadow:
     0 0 0 4px rgba(76, 124, 255, 0.12),
     inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.ai-input-error,
+.ai-select-error {
+  border-color: rgba(225, 29, 72, 0.72);
+  background: rgba(255, 241, 242, 0.9);
+}
+
+.ai-input-error:focus,
+.ai-select-error:focus {
+  border-color: rgba(190, 24, 93, 0.92);
+  box-shadow:
+    0 0 0 4px rgba(190, 24, 93, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.ai-field-error {
+  color: rgb(159, 18, 57);
+  font-weight: 500;
 }
 
 .ai-page {
