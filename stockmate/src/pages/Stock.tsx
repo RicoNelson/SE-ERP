@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { collection, query, onSnapshot, orderBy, doc, serverTimestamp, runTransaction, where, limit, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles, ChevronDown, ArrowUpDown, PackagePlus } from 'lucide-react';
@@ -29,11 +29,6 @@ interface ProductFifoLayer {
   receivedAt?: Date | null;
 }
 
-interface ProductDetailCache {
-  movements: ProductMovement[];
-  layers: ProductFifoLayer[];
-}
-
 export default function Stock() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -57,7 +52,6 @@ export default function Stock() {
   const [recentMovements, setRecentMovements] = useState<ProductMovement[]>([]);
   const [fifoLayers, setFifoLayers] = useState<ProductFifoLayer[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
-  const productDetailCacheRef = useRef<Record<string, ProductDetailCache>>({});
   const normalizedSearchQuery = normalizeSearchQuery(searchQuery);
 
   useEffect(() => {
@@ -238,7 +232,6 @@ export default function Stock() {
           updatedAt: serverTimestamp(),
         });
       });
-      delete productDetailCacheRef.current[editingProduct.id!];
       setEditingProduct(null);
       setOpnameQty('');
       setSelectedOpnameLayerId('');
@@ -259,15 +252,7 @@ export default function Stock() {
       return;
     }
 
-    const cacheKey = selectedProductDetail.id;
-    const cached = productDetailCacheRef.current[cacheKey];
-    if (cached) {
-      setRecentMovements(cached.movements);
-      setFifoLayers(cached.layers);
-      setDetailLoading(false);
-    } else {
-      setDetailLoading(true);
-    }
+    setDetailLoading(true);
 
     let cancelled = false;
     (async () => {
@@ -331,7 +316,6 @@ export default function Stock() {
             return aTime - bTime;
           });
 
-        productDetailCacheRef.current[cacheKey] = { movements, layers };
         setRecentMovements(movements);
         setFifoLayers(layers);
       } catch (error) {
