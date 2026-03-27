@@ -72,6 +72,8 @@ export default function StockPbManage() {
   const [pbAddProductId, setPbAddProductId] = useState<string | null>(null);
   const [isAddProductFocusOpen, setIsAddProductFocusOpen] = useState(false);
   const [pbAddQty, setPbAddQty] = useState('1');
+  const [pbAddBuyPrice, setPbAddBuyPrice] = useState('');
+  const [pbAddSellPrice, setPbAddSellPrice] = useState('');
   const [pbAddProductForm, setPbAddProductForm] = useState<ProductFormData>({ ...DEFAULT_PRODUCT_FORM });
   const [pbAddProductFormErrors, setPbAddProductFormErrors] = useState<ProductFormFieldErrors>({});
 
@@ -216,10 +218,20 @@ export default function StockPbManage() {
   const filteredPbList = showHiddenPb
     ? searchFilteredPbList
     : searchFilteredPbList.filter((purchase) => !fullySoldPbIds.has(purchase.id));
+  const orderedPbList = showHiddenPb
+    ? [...filteredPbList].sort((a, b) => {
+      const aIsSold = fullySoldPbIds.has(a.id);
+      const bIsSold = fullySoldPbIds.has(b.id);
+      if (aIsSold !== bIsSold) return aIsSold ? -1 : 1;
+      const aTime = a.receivedAt?.getTime() || a.receiptDate?.getTime() || 0;
+      const bTime = b.receivedAt?.getTime() || b.receiptDate?.getTime() || 0;
+      return bTime - aTime;
+    })
+    : filteredPbList;
   const pbItemsPerPage = 8;
-  const pbTotalPages = Math.max(1, Math.ceil(filteredPbList.length / pbItemsPerPage));
+  const pbTotalPages = Math.max(1, Math.ceil(orderedPbList.length / pbItemsPerPage));
   const pbStartIndex = (pbCurrentPage - 1) * pbItemsPerPage;
-  const paginatedPbList = filteredPbList.slice(pbStartIndex, pbStartIndex + pbItemsPerPage);
+  const paginatedPbList = orderedPbList.slice(pbStartIndex, pbStartIndex + pbItemsPerPage);
 
   useEffect(() => {
     if (pbCurrentPage > pbTotalPages) setPbCurrentPage(pbTotalPages);
@@ -242,6 +254,8 @@ export default function StockPbManage() {
   const handleSelectAddProduct = (product: Product) => {
     setPbAddProductId(product.id || null);
     setPbAddProductQuery(formatProductName(product.name));
+    setPbAddBuyPrice(formatNumber(product.costPrice || 0));
+    setPbAddSellPrice(formatNumber(product.sellPrice || 0));
     setIsAddProductFocusOpen(false);
     setPbFieldError(null);
   };
@@ -256,6 +270,8 @@ export default function StockPbManage() {
     setPbAddProductForm({ ...DEFAULT_PRODUCT_FORM });
     setPbAddProductFormErrors({});
     setPbAddQty('1');
+    setPbAddBuyPrice('');
+    setPbAddSellPrice('');
     setIsPbDetailLoading(true);
     try {
       const itemsQuery = query(
@@ -341,6 +357,16 @@ export default function StockPbManage() {
         setPbFieldError('Pilih produk yang ingin ditambahkan.');
         return;
       }
+      const unitCost = parseNumber(pbAddBuyPrice);
+      const sellPrice = parseNumber(pbAddSellPrice);
+      if (!pbAddBuyPrice.trim() || unitCost <= 0) {
+        setPbFieldError('Harga Beli wajib diisi dan lebih dari 0.');
+        return;
+      }
+      if (!pbAddSellPrice.trim() || sellPrice <= 0) {
+        setPbFieldError('Harga Jual wajib diisi dan lebih dari 0.');
+        return;
+      }
       const product = products.find((item) => item.id === pbAddProductId);
       const productId = product?.id;
       if (!productId || !product) {
@@ -359,14 +385,16 @@ export default function StockPbManage() {
           quantity,
           draftQuantity: quantity.toString(),
           originalQuantity: 0,
-          unitCost: product.costPrice || 0,
-          sellPrice: product.sellPrice || 0,
+          unitCost,
+          sellPrice,
           isNew: true,
         },
       ]));
       setPbAddProductQuery('');
       setPbAddProductId(null);
       setPbAddQty('1');
+      setPbAddBuyPrice('');
+      setPbAddSellPrice('');
       setPbFieldError(null);
       return;
     }
@@ -400,6 +428,8 @@ export default function StockPbManage() {
     setPbAddProductForm({ ...DEFAULT_PRODUCT_FORM });
     setPbAddProductFormErrors({});
     setPbAddQty('1');
+    setPbAddBuyPrice('');
+    setPbAddSellPrice('');
     setPbFieldError(null);
   };
 
@@ -811,23 +841,338 @@ export default function StockPbManage() {
             <div className="space-y-2">
               {paginatedPbList.map((purchase) => {
                 const isActive = selectedPb?.id === purchase.id;
+                const isFullySold = fullySoldPbIds.has(purchase.id);
                 return (
-                  <button
-                    key={purchase.id}
-                    onClick={() => { void loadPbDetail(purchase); }}
-                    className={`w-full rounded-2xl border p-3 text-left transition ${isActive ? 'border-sky-300 bg-sky-50/60' : 'border-slate-200 bg-white hover:border-sky-200'}`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-semibold text-slate-900">PB {purchase.receiptCode || purchase.id}</p>
-                        <p className="mt-1 text-xs text-slate-500">{purchase.supplierName || '-'}</p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {purchase.receiptDate ? purchase.receiptDate.toLocaleDateString('id-ID') : '-'}
-                        </p>
+                  <div key={purchase.id} className="space-y-2">
+                    <button
+                      onClick={() => { void loadPbDetail(purchase); }}
+                      className={`w-full rounded-2xl border p-3 text-left transition ${
+                        isFullySold
+                          ? (isActive ? 'border-amber-300 bg-amber-50/80' : 'border-amber-200 bg-amber-50/60 hover:border-amber-300')
+                          : (isActive ? 'border-sky-300 bg-sky-50/60' : 'border-slate-200 bg-white hover:border-sky-200')
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900">PB {purchase.receiptCode || purchase.id}</p>
+                            {isFullySold && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700">
+                                Habis
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 text-xs text-slate-500">{purchase.supplierName || '-'}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {purchase.receiptDate ? purchase.receiptDate.toLocaleDateString('id-ID') : '-'}
+                          </p>
+                        </div>
+                        <p className="text-xs font-semibold text-slate-700">Rp {formatNumber(purchase.totalAmount || 0)}</p>
                       </div>
-                      <p className="text-xs font-semibold text-slate-700">Rp {formatNumber(purchase.totalAmount || 0)}</p>
-                    </div>
-                  </button>
+                    </button>
+
+                    {isActive && (
+                      <section className="ai-card space-y-3 p-5">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Detail PB</p>
+                            <h3 className="text-base font-bold text-slate-900">PB {selectedPb.receiptCode || selectedPb.id}</h3>
+                            <p className="text-xs text-slate-500">{selectedPb.supplierName || '-'}</p>
+                          </div>
+                          <p className="text-xs text-slate-500">
+                            {selectedPb.receiptDate ? selectedPb.receiptDate.toLocaleDateString('id-ID') : '-'}
+                          </p>
+                        </div>
+
+                        {isPbDetailLoading ? (
+                          <p className="text-sm text-slate-500">Memuat item PB...</p>
+                        ) : pbEditableItems.length === 0 ? (
+                          <p className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                            PB ini belum memiliki item.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {pbEditableItems.map((item) => (
+                              <div key={`${item.productId}-${item.purchaseItemId || 'new'}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-sm font-semibold text-slate-900">{formatProductName(item.productNameSnapshot)}</p>
+                                      {userRole === 'owner' && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemovePbItem(item)}
+                                          className="ai-button-ghost inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-rose-600"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                          Hapus
+                                        </button>
+                                      )}
+                                    </div>
+                                    <p className="text-xs text-slate-500">Modal Rp {formatNumber(item.unitCost)} • Jual Rp {formatNumber(item.sellPrice)}</p>
+                                    {!item.isNew && (
+                                      <p className="text-xs text-slate-500">
+                                        Sisa layer PB: {formatNumber(item.layerQuantityRemaining || 0)}
+                                        {' • '}Terjual dari layer ini: {formatNumber(item.soldFromLayer || 0)}
+                                      </p>
+                                    )}
+                                    {item.isNew && <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-600">Item baru</p>}
+                                  </div>
+                                  <div className="w-24">
+                                    <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Jumlah</label>
+                                    {userRole === 'owner' ? (
+                                      <input
+                                        type="text"
+                                        inputMode="numeric"
+                                        value={item.draftQuantity}
+                                        onChange={(event) => {
+                                          const { formatted } = handleFormattedInputChange(event.target.value);
+                                          setPbEditableItems((prev) => prev.map((row) => (
+                                            row.productId === item.productId
+                                              ? { ...row, draftQuantity: formatted }
+                                              : row
+                                          )));
+                                          setPbFieldError(null);
+                                        }}
+                                        className="ai-input w-full px-3 py-2 text-right text-sm font-semibold"
+                                      />
+                                    ) : (
+                                      <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm font-semibold text-slate-800">
+                                        {formatNumber(parseNumber(item.draftQuantity))}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {userRole === 'owner' && removedPbItems.length > 0 && (
+                          <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">Dihapus (Belum Disimpan)</p>
+                            <div className="mt-2 space-y-2">
+                              {removedPbItems.map((removedItem) => (
+                                <div key={`removed-${removedItem.productId}`} className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-white px-3 py-2">
+                                  <p className="text-sm font-medium text-slate-900">
+                                    {formatProductName(removedItem.productNameSnapshot)} • Qty {formatNumber(parseNumber(removedItem.draftQuantity))}
+                                    {!removedItem.isNew ? ` • Sisa layer ${formatNumber(removedItem.layerQuantityRemaining || 0)}` : ''}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRestoreRemovedPbItem(removedItem)}
+                                    className="ai-button-ghost px-2 py-1 text-xs font-semibold text-sky-700"
+                                  >
+                                    Batal Hapus
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {userRole === 'owner' && (
+                          <div className="rounded-2xl border border-dashed border-slate-300 p-3">
+                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Tambah Produk yang Terlewat</p>
+                            {addProductMode === 'existing' ? (
+                              <div className="relative mt-3">
+                                <div className="mb-1 flex items-center justify-between gap-3">
+                                  <label className="block text-sm font-medium text-slate-700">Nama Produk *</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPbAddProductQuery('');
+                        setPbAddProductId(null);
+                        setPbAddBuyPrice('');
+                        setPbAddSellPrice('');
+                        setPbFieldError(null);
+                        setIsAddProductFocusOpen(false);
+                      }}
+                                    className="ai-button-ghost px-2 py-1 text-xs font-medium text-rose-600"
+                                  >
+                                    Hapus
+                                  </button>
+                                </div>
+                                <input
+                                  type="text"
+                                  value={pbAddProductQuery}
+                                  onFocus={() => setIsAddProductFocusOpen(true)}
+                                  onBlur={() => window.setTimeout(() => setIsAddProductFocusOpen(false), 120)}
+                                  onChange={(event) => {
+                                    setPbAddProductQuery(event.target.value.toLocaleUpperCase('id-ID'));
+                                    setPbAddProductId(null);
+                                    setPbFieldError(null);
+                                  }}
+                                  placeholder="Cari produk..."
+                                  className="ai-input w-full px-4 py-3 text-sm"
+                                />
+                                {isAddProductFocusOpen && (
+                                  <div className="absolute z-10 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
+                                    {filteredAddProductSuggestions.map((product) => (
+                                      <button
+                                        key={product.id}
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => handleSelectAddProduct(product)}
+                                        className="w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-sky-50"
+                                      >
+                                        <p className="font-medium text-slate-900">{formatProductName(product.name)}</p>
+                                        <p className="text-xs text-slate-500">
+                                          SKU: {product.sku || '-'} • Stok tersisa: {formatNumber(product.stockQty)}
+                                        </p>
+                                      </button>
+                                    ))}
+                                    {addProductHasNoMatch && (
+                                      <button
+                                        type="button"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => {
+                                          setAddProductMode('new');
+                                          setPbAddProductForm((prev) => ({ ...prev, name: formatProductName(pbAddProductQuery) }));
+                                          setPbAddProductFormErrors({});
+                                          setIsAddProductFocusOpen(false);
+                                        }}
+                                        className="w-full rounded-xl border border-dashed border-sky-300 bg-sky-50 px-3 py-2 text-left text-sm font-medium text-sky-700"
+                                      >
+                                        + Tambah produk baru "{formatProductName(pbAddProductQuery)}"
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+              ) : (
+                <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                  <p className="text-sm font-semibold text-slate-900">Tambah Produk Baru</p>
+                                  <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPbAddProductForm({ ...DEFAULT_PRODUCT_FORM });
+                          setPbAddProductFormErrors({});
+                          setPbAddQty('1');
+                          setPbFieldError(null);
+                        }}
+                                      className="ai-button-ghost px-2 py-1 text-xs font-medium text-rose-600"
+                                    >
+                                      Hapus
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setAddProductMode('existing');
+                                        setPbAddProductFormErrors({});
+                                      }}
+                                      className="text-xs font-medium text-slate-600 hover:text-slate-800"
+                                    >
+                                      Gunakan Produk Existing
+                                    </button>
+                                  </div>
+                                </div>
+                                <ProductFormFields
+                                  value={pbAddProductForm}
+                                  errors={pbAddProductFormErrors}
+                                  onChange={(next) => {
+                                    setPbAddProductForm(next);
+                                    setPbAddProductFormErrors({});
+                                    setPbFieldError(null);
+                                  }}
+                                  idPrefix="pb-missing-product-inline"
+                                />
+                              </div>
+              )}
+
+              {addProductMode === 'existing' ? (
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Jumlah PB *</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={pbAddQty}
+                      onChange={(event) => {
+                        const { formatted } = handleFormattedInputChange(event.target.value);
+                        setPbAddQty(formatted);
+                        setPbFieldError(null);
+                      }}
+                      placeholder="Qty"
+                      className="ai-input w-full px-3 py-2.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Harga Beli *</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={pbAddBuyPrice}
+                      onChange={(event) => {
+                        const { formatted } = handleFormattedInputChange(event.target.value);
+                        setPbAddBuyPrice(formatted);
+                        setPbFieldError(null);
+                      }}
+                      placeholder="0"
+                      className="ai-input w-full px-3 py-2.5 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Harga Jual *</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={pbAddSellPrice}
+                      onChange={(event) => {
+                        const { formatted } = handleFormattedInputChange(event.target.value);
+                        setPbAddSellPrice(formatted);
+                        setPbFieldError(null);
+                      }}
+                      placeholder="0"
+                      className="ai-input w-full px-3 py-2.5 text-sm"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3">
+                  <label className="mb-1 block text-sm font-medium text-slate-700">Jumlah PB *</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={pbAddQty}
+                    onChange={(event) => {
+                      const { formatted } = handleFormattedInputChange(event.target.value);
+                      setPbAddQty(formatted);
+                      setPbFieldError(null);
+                    }}
+                    placeholder="Qty"
+                    className="ai-input w-full px-3 py-2.5 text-sm"
+                  />
+                </div>
+              )}
+                            <button
+                              onClick={handleAddMissingPbProduct}
+                              className="ai-button mt-2 inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold"
+                            >
+                              <PackagePlus className="h-4 w-4" />
+                              Tambahkan ke PB
+                            </button>
+                          </div>
+                        )}
+
+                        {pbFieldError && (
+                          <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600">{pbFieldError}</p>
+                        )}
+
+                        {userRole === 'owner' && (
+                          <button
+                            onClick={handleSavePbAdjustments}
+                            disabled={isPbSaving || isPbDetailLoading || (pbEditableItems.length === 0 && removedPbItems.length === 0)}
+                            className="ai-button w-full px-4 py-3 font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isPbSaving ? 'MENYIMPAN PERUBAHAN...' : 'SIMPAN PERUBAHAN PB'}
+                          </button>
+                        )}
+                      </section>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -854,255 +1199,6 @@ export default function StockPbManage() {
           </>
         )}
       </section>
-
-      {selectedPb && (
-        <section className="ai-card mt-4 space-y-3 p-5">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Detail PB</p>
-              <h3 className="text-base font-bold text-slate-900">PB {selectedPb.receiptCode || selectedPb.id}</h3>
-              <p className="text-xs text-slate-500">{selectedPb.supplierName || '-'}</p>
-            </div>
-            <p className="text-xs text-slate-500">
-              {selectedPb.receiptDate ? selectedPb.receiptDate.toLocaleDateString('id-ID') : '-'}
-            </p>
-          </div>
-
-          {isPbDetailLoading ? (
-            <p className="text-sm text-slate-500">Memuat item PB...</p>
-          ) : pbEditableItems.length === 0 ? (
-            <p className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
-              PB ini belum memiliki item.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {pbEditableItems.map((item) => (
-                <div key={`${item.productId}-${item.purchaseItemId || 'new'}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="text-sm font-semibold text-slate-900">{formatProductName(item.productNameSnapshot)}</p>
-                        {userRole === 'owner' && (
-                          <button
-                            type="button"
-                            onClick={() => handleRemovePbItem(item)}
-                            className="ai-button-ghost inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-rose-600"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Hapus
-                          </button>
-                        )}
-                      </div>
-                      <p className="text-xs text-slate-500">Modal Rp {formatNumber(item.unitCost)} • Jual Rp {formatNumber(item.sellPrice)}</p>
-                      {!item.isNew && (
-                        <p className="text-xs text-slate-500">
-                          Sisa layer PB: {formatNumber(item.layerQuantityRemaining || 0)}
-                          {' • '}Terjual dari layer ini: {formatNumber(item.soldFromLayer || 0)}
-                        </p>
-                      )}
-                      {item.isNew && <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-600">Item baru</p>}
-                    </div>
-                    <div className="w-24">
-                      <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Jumlah</label>
-                      {userRole === 'owner' ? (
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={item.draftQuantity}
-                          onChange={(event) => {
-                            const { formatted } = handleFormattedInputChange(event.target.value);
-                            setPbEditableItems((prev) => prev.map((row) => (
-                              row.productId === item.productId
-                                ? { ...row, draftQuantity: formatted }
-                                : row
-                            )));
-                            setPbFieldError(null);
-                          }}
-                          className="ai-input w-full px-3 py-2 text-right text-sm font-semibold"
-                        />
-                      ) : (
-                        <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm font-semibold text-slate-800">
-                          {formatNumber(parseNumber(item.draftQuantity))}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {userRole === 'owner' && removedPbItems.length > 0 && (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">Dihapus (Belum Disimpan)</p>
-              <div className="mt-2 space-y-2">
-                {removedPbItems.map((removedItem) => (
-                  <div key={`removed-${removedItem.productId}`} className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-white px-3 py-2">
-                    <p className="text-sm font-medium text-slate-900">
-                      {formatProductName(removedItem.productNameSnapshot)} • Qty {formatNumber(parseNumber(removedItem.draftQuantity))}
-                      {!removedItem.isNew ? ` • Sisa layer ${formatNumber(removedItem.layerQuantityRemaining || 0)}` : ''}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => handleRestoreRemovedPbItem(removedItem)}
-                      className="ai-button-ghost px-2 py-1 text-xs font-semibold text-sky-700"
-                    >
-                      Batal Hapus
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {userRole === 'owner' && (
-            <div className="rounded-2xl border border-dashed border-slate-300 p-3">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Tambah Produk yang Terlewat</p>
-              {addProductMode === 'existing' ? (
-                <div className="relative mt-3">
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <label className="block text-sm font-medium text-slate-700">Nama Produk *</label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPbAddProductQuery('');
-                        setPbAddProductId(null);
-                        setPbFieldError(null);
-                        setIsAddProductFocusOpen(false);
-                      }}
-                      className="ai-button-ghost px-2 py-1 text-xs font-medium text-rose-600"
-                    >
-                      Hapus
-                    </button>
-                  </div>
-                  <input
-                    type="text"
-                    value={pbAddProductQuery}
-                    onFocus={() => setIsAddProductFocusOpen(true)}
-                    onBlur={() => window.setTimeout(() => setIsAddProductFocusOpen(false), 120)}
-                    onChange={(event) => {
-                      setPbAddProductQuery(event.target.value.toLocaleUpperCase('id-ID'));
-                      setPbAddProductId(null);
-                      setPbFieldError(null);
-                    }}
-                    placeholder="Cari produk..."
-                    className="ai-input w-full px-4 py-3 text-sm"
-                  />
-                  {isAddProductFocusOpen && (
-                    <div className="absolute z-10 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
-                      {filteredAddProductSuggestions.map((product) => (
-                        <button
-                          key={product.id}
-                          type="button"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => handleSelectAddProduct(product)}
-                          className="w-full rounded-xl px-3 py-2 text-left text-sm hover:bg-sky-50"
-                        >
-                          <p className="font-medium text-slate-900">{formatProductName(product.name)}</p>
-                          <p className="text-xs text-slate-500">
-                            SKU: {product.sku || '-'} • Stok tersisa: {formatNumber(product.stockQty)}
-                          </p>
-                        </button>
-                      ))}
-                      {addProductHasNoMatch && (
-                        <button
-                          type="button"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => {
-                            setAddProductMode('new');
-                            setPbAddProductForm((prev) => ({ ...prev, name: formatProductName(pbAddProductQuery) }));
-                            setPbAddProductFormErrors({});
-                            setIsAddProductFocusOpen(false);
-                          }}
-                          className="w-full rounded-xl border border-dashed border-sky-300 bg-sky-50 px-3 py-2 text-left text-sm font-medium text-sky-700"
-                        >
-                          + Tambah produk baru "{formatProductName(pbAddProductQuery)}"
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="text-sm font-semibold text-slate-900">Tambah Produk Baru</p>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setPbAddProductForm({ ...DEFAULT_PRODUCT_FORM });
-                          setPbAddProductFormErrors({});
-                          setPbFieldError(null);
-                        }}
-                        className="ai-button-ghost px-2 py-1 text-xs font-medium text-rose-600"
-                      >
-                        Hapus
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAddProductMode('existing');
-                          setPbAddProductFormErrors({});
-                        }}
-                        className="text-xs font-medium text-slate-600 hover:text-slate-800"
-                      >
-                        Gunakan Produk Existing
-                      </button>
-                    </div>
-                  </div>
-                  <ProductFormFields
-                    value={pbAddProductForm}
-                    errors={pbAddProductFormErrors}
-                    onChange={(next) => {
-                      setPbAddProductForm(next);
-                      setPbAddProductFormErrors({});
-                      setPbFieldError(null);
-                    }}
-                    idPrefix="pb-missing-product-inline"
-                  />
-                </div>
-              )}
-
-              <div className="mt-3">
-                <label className="mb-1 block text-sm font-medium text-slate-700">Jumlah PB *</label>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={pbAddQty}
-                  onChange={(event) => {
-                    const { formatted } = handleFormattedInputChange(event.target.value);
-                    setPbAddQty(formatted);
-                    setPbFieldError(null);
-                  }}
-                  placeholder="Qty"
-                  className="ai-input w-full px-3 py-2.5 text-sm"
-                />
-              </div>
-              <button
-                onClick={handleAddMissingPbProduct}
-                className="ai-button mt-2 inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold"
-              >
-                <PackagePlus className="h-4 w-4" />
-                Tambahkan ke PB
-              </button>
-            </div>
-          )}
-
-          {pbFieldError && (
-            <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-600">{pbFieldError}</p>
-          )}
-
-          {userRole === 'owner' && (
-            <button
-              onClick={handleSavePbAdjustments}
-              disabled={isPbSaving || isPbDetailLoading || (pbEditableItems.length === 0 && removedPbItems.length === 0)}
-              className="ai-button w-full px-4 py-3 font-semibold disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isPbSaving ? 'MENYIMPAN PERUBAHAN...' : 'SIMPAN PERUBAHAN PB'}
-            </button>
-          )}
-        </section>
-      )}
     </div>
   );
 }

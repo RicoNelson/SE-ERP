@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useBeforeUnload, useNavigate, useSearchParams } from 'react-router-dom';
+import { useBlocker, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   collection,
   type DocumentReference,
@@ -421,21 +421,30 @@ export default function StockAdd() {
   const [poHeaderErrors, setPoHeaderErrors] = useState<PoHeaderErrors>({});
   const [poRowErrors, setPoRowErrors] = useState<Record<string, PoRowFieldErrors>>({});
   const [hasAppliedProductPrefill, setHasAppliedProductPrefill] = useState(false);
+  const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const { currentUser } = useAuth();
   const hasUnsavedChanges = hasProductFormChanges(productForm) || hasMeaningfulPbData(poDraft);
+  const shouldBlockNavigation = hasUnsavedChanges && !isSavingPo && !isSavingProduct;
+  const blocker = useBlocker(shouldBlockNavigation);
 
-  useBeforeUnload((event) => {
-    if (!hasUnsavedChanges || isSavingPo || isSavingProduct) return;
-    event.preventDefault();
-    event.returnValue = '';
-  });
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      setShowLeaveConfirm(true);
+    }
+  }, [blocker.state]);
 
   const handleBack = () => {
-    if (hasUnsavedChanges && !isSavingPo && !isSavingProduct) {
-      const confirmed = window.confirm('Yakin ingin kembali? Input saat ini belum disimpan dan akan hilang.');
-      if (!confirmed) return;
-    }
     navigate('/stock');
+  };
+
+  const handleCancelLeave = () => {
+    setShowLeaveConfirm(false);
+    if (blocker.state === 'blocked') blocker.reset();
+  };
+
+  const handleConfirmLeave = () => {
+    setShowLeaveConfirm(false);
+    if (blocker.state === 'blocked') blocker.proceed();
   };
 
   useEffect(() => {
@@ -725,6 +734,14 @@ export default function StockAdd() {
           };
         }
 
+        const receiptCodeValue = poDraft.receiptCode.trim();
+        const receiptCodeKey = normalizeSearchQuery(receiptCodeValue);
+        const receiptCodeRef = doc(db, 'purchase_receipt_keys', receiptCodeKey);
+        const existingReceiptCode = await transaction.get(receiptCodeRef);
+        if (existingReceiptCode.exists()) {
+          throw new Error('DUPLICATE_RECEIPT_CODE');
+        }
+
         const purchaseRef = doc(collection(db, 'purchases'));
         const receiptDate = Timestamp.fromDate(new Date(`${poDraft.receiptDate}T00:00:00`));
         const items: Array<{
@@ -948,6 +965,13 @@ export default function StockAdd() {
           receivedBy: currentUser?.uid || 'unknown',
         });
 
+        transaction.set(receiptCodeRef, {
+          purchaseId: purchaseRef.id,
+          receiptCode: receiptCodeValue,
+          createdAt: serverTimestamp(),
+          createdBy: currentUser?.uid || 'unknown',
+        });
+
         return {
           status: 'created' as const,
           purchaseId: purchaseRef.id,
@@ -966,7 +990,10 @@ export default function StockAdd() {
       navigate('/stock');
     } catch (error) {
       console.error(error);
-      if (error instanceof FirebaseError) {
+      if (error instanceof Error && error.message === 'DUPLICATE_RECEIPT_CODE') {
+        setPoHeaderErrors((prev) => ({ ...prev, receiptCode: 'Kode Struk sudah digunakan. Gunakan kode lain.' }));
+        alert('Kode Struk sudah digunakan. Gunakan kode lain.');
+      } else if (error instanceof FirebaseError) {
         alert(`Gagal menyimpan Pembelian Barang (${error.code}). ${error.message}`);
       } else if (error instanceof Error) {
         alert(`Gagal menyimpan Pembelian Barang. ${error.message}`);
@@ -980,6 +1007,33 @@ export default function StockAdd() {
 
   return (
     <div className="ai-page page-enter">
+      {showLeaveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
+            <h3 className="text-lg font-bold text-slate-900">Yakin ingin kembali?</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              Input yang sedang kamu isi belum disimpan. Jika lanjut, semua perubahan di halaman ini akan hilang.
+            </p>
+            <div className="mt-5 flex gap-3">
+              <button
+                type="button"
+                onClick={handleCancelLeave}
+                className="ai-button-ghost flex-1 px-4 py-2.5 font-semibold text-slate-700"
+              >
+                Tetap di Halaman
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmLeave}
+                className="ai-button flex-1 px-4 py-2.5 font-semibold"
+              >
+                Ya, Kembali
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <section className="ai-card space-y-4 p-5">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
