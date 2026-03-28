@@ -110,9 +110,11 @@ export default function StockPbManage() {
         where('sourceType', '==', 'purchase_receipt'),
         limit(4000),
       );
-      const [purchaseSnap, layerSnap] = await Promise.all([
+      const productQuery = query(collection(db, 'products'), limit(4000));
+      const [purchaseSnap, layerSnap, productSnap] = await Promise.all([
         getDocs(purchaseQuery),
         getDocs(layerQuery),
+        getDocs(productQuery),
       ]);
       const docs = purchaseSnap.docs;
       const purchases: PurchaseSummary[] = docs
@@ -163,9 +165,21 @@ export default function StockPbManage() {
       });
 
       const nextFullySoldPbIds = new Set<string>();
+      const activeProductIds = new Set<string>();
+      productSnap.forEach((productDoc) => {
+        const data = productDoc.data();
+        const isSoftDeleted = data.isActive === false || data.isDeleted === true || Boolean(data.deletedAt);
+        if (!isSoftDeleted) {
+          activeProductIds.add(productDoc.id);
+        }
+      });
+
       purchases.forEach((purchase) => {
         const status = layerStatusByPbId.get(purchase.id);
-        if (status?.hasLayer && !status.hasRemainingStock) {
+        const itemProductIds = purchase.items.map((item) => item.productId).filter(Boolean);
+        const hasDeletedProductRef = itemProductIds.some((productId) => !activeProductIds.has(productId));
+
+        if ((status?.hasLayer && !status.hasRemainingStock) || hasDeletedProductRef) {
           nextFullySoldPbIds.add(purchase.id);
         }
       });
@@ -845,7 +859,14 @@ export default function StockPbManage() {
                 return (
                   <div key={purchase.id} className="space-y-2">
                     <button
-                      onClick={() => { void loadPbDetail(purchase); }}
+                      onClick={() => {
+                        if (isActive) {
+                          setSelectedPb(null);
+                          setPbFieldError(null);
+                          return;
+                        }
+                        void loadPbDetail(purchase);
+                      }}
                       className={`w-full rounded-2xl border p-3 text-left transition ${
                         isFullySold
                           ? (isActive ? 'border-amber-300 bg-amber-50/80' : 'border-amber-200 bg-amber-50/60 hover:border-amber-300')
@@ -872,15 +893,16 @@ export default function StockPbManage() {
                     </button>
 
                     {isActive && (
-                      <section className="ai-card space-y-3 p-5">
+                      <div className="mt-2">
+                        <section className="ai-card pb-inline-reveal space-y-3 p-5">
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Detail PB</p>
-                            <h3 className="text-base font-bold text-slate-900">PB {selectedPb.receiptCode || selectedPb.id}</h3>
-                            <p className="text-xs text-slate-500">{selectedPb.supplierName || '-'}</p>
+                            <h3 className="text-base font-bold text-slate-900">PB {purchase.receiptCode || purchase.id}</h3>
+                            <p className="text-xs text-slate-500">{purchase.supplierName || '-'}</p>
                           </div>
                           <p className="text-xs text-slate-500">
-                            {selectedPb.receiptDate ? selectedPb.receiptDate.toLocaleDateString('id-ID') : '-'}
+                            {purchase.receiptDate ? purchase.receiptDate.toLocaleDateString('id-ID') : '-'}
                           </p>
                         </div>
 
@@ -1170,7 +1192,8 @@ export default function StockPbManage() {
                             {isPbSaving ? 'MENYIMPAN PERUBAHAN...' : 'SIMPAN PERUBAHAN PB'}
                           </button>
                         )}
-                      </section>
+                        </section>
+                      </div>
                     )}
                   </div>
                 );
