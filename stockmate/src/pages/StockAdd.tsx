@@ -66,6 +66,11 @@ interface PoRowFieldErrors {
 
 const uppercaseInputValue = (value: string) => value.toLocaleUpperCase('id-ID');
 const trimEdgeWhitespace = (value: string) => value.trim();
+const toReceiptCodeDocId = (value: string): string =>
+  normalizeSearchQuery(value)
+    // Escape characters that can break Firestore document paths.
+    .replace(/%/g, '%25')
+    .replace(/\//g, '%2F');
 const uppercaseProductFormInput = (form: ProductFormData): ProductFormData => ({
   ...form,
   name: uppercaseInputValue(form.name),
@@ -736,7 +741,7 @@ export default function StockAdd() {
         }
 
         const receiptCodeValue = poDraft.receiptCode.trim();
-        const receiptCodeKey = normalizeSearchQuery(receiptCodeValue);
+        const receiptCodeKey = toReceiptCodeDocId(receiptCodeValue);
         const receiptCodeRef = doc(db, 'purchase_receipt_keys', receiptCodeKey);
         const existingReceiptCode = await transaction.get(receiptCodeRef);
         if (existingReceiptCode.exists()) {
