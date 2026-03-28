@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useBlocker, useNavigate, useSearchParams } from 'react-router-dom';
+import { useBeforeUnload, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   collection,
   type DocumentReference,
@@ -424,27 +424,28 @@ export default function StockAdd() {
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const { currentUser } = useAuth();
   const hasUnsavedChanges = hasProductFormChanges(productForm) || hasMeaningfulPbData(poDraft);
-  const shouldBlockNavigation = hasUnsavedChanges && !isSavingPo && !isSavingProduct;
-  const blocker = useBlocker(shouldBlockNavigation);
 
-  useEffect(() => {
-    if (blocker.state === 'blocked') {
-      setShowLeaveConfirm(true);
-    }
-  }, [blocker.state]);
+  useBeforeUnload((event) => {
+    if (!hasUnsavedChanges || isSavingPo || isSavingProduct) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
 
   const handleBack = () => {
+    if (hasUnsavedChanges && !isSavingPo && !isSavingProduct) {
+      setShowLeaveConfirm(true);
+      return;
+    }
     navigate('/stock');
   };
 
   const handleCancelLeave = () => {
     setShowLeaveConfirm(false);
-    if (blocker.state === 'blocked') blocker.reset();
   };
 
   const handleConfirmLeave = () => {
     setShowLeaveConfirm(false);
-    if (blocker.state === 'blocked') blocker.proceed();
+    navigate('/stock');
   };
 
   useEffect(() => {

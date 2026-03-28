@@ -110,11 +110,9 @@ export default function StockPbManage() {
         where('sourceType', '==', 'purchase_receipt'),
         limit(4000),
       );
-      const productQuery = query(collection(db, 'products'), limit(4000));
-      const [purchaseSnap, layerSnap, productSnap] = await Promise.all([
+      const [purchaseSnap, layerSnap] = await Promise.all([
         getDocs(purchaseQuery),
         getDocs(layerQuery),
-        getDocs(productQuery),
       ]);
       const docs = purchaseSnap.docs;
       const purchases: PurchaseSummary[] = docs
@@ -166,12 +164,10 @@ export default function StockPbManage() {
 
       const nextFullySoldPbIds = new Set<string>();
       const activeProductIds = new Set<string>();
-      productSnap.forEach((productDoc) => {
-        const data = productDoc.data();
-        const isSoftDeleted = data.isActive === false || data.isDeleted === true || Boolean(data.deletedAt);
-        if (!isSoftDeleted) {
-          activeProductIds.add(productDoc.id);
-        }
+      products.forEach((product) => {
+        if (!product.id) return;
+        const isSoftDeleted = product.isActive === false;
+        if (!isSoftDeleted) activeProductIds.add(product.id);
       });
 
       purchases.forEach((purchase) => {
@@ -199,7 +195,7 @@ export default function StockPbManage() {
 
   useEffect(() => {
     void loadPbList();
-  }, [currentUser?.uid]);
+  }, [currentUser?.uid, products]);
 
   useEffect(() => {
     setPbCurrentPage(1);
