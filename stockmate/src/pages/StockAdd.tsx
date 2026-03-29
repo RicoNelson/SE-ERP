@@ -192,11 +192,11 @@ const buildPoDraftFromAi = (draft: InvoiceExtractDraft, products: Product[]): Po
       selectedProductId: found?.id || null,
       qty: formatNumber(row.qty || 0),
       buyPrice: formatNumber(row.buyPrice || 0),
-      sellPrice: formatNumber(row.sellPrice || row.buyPrice || 0),
+      sellPrice: '',
       inlineProductEnabled: false,
       inlineProductForm: { ...DEFAULT_PRODUCT_FORM },
     };
-  }).filter((item) => item.qty && item.buyPrice && item.sellPrice);
+  }).filter((item) => item.qty && item.buyPrice);
 
   return {
     receiptCode: uppercaseInputValue(draft.receiptCode || ''),

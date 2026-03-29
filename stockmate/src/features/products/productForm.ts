@@ -35,7 +35,7 @@ export const DEFAULT_PRODUCT_FORM: ProductFormData = {
   sellPrice: '',
   costPrice: '',
   stockQty: '0',
-  lowStockThreshold: '5',
+  lowStockThreshold: '1',
 };
 
 export const toNameKey = (name: string): string =>

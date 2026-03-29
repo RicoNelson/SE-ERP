@@ -318,10 +318,10 @@ const extractJsonWithGemini = async (ocrText: string, apiKey: string, supplierHi
   const prompt = [
     'You are extracting supplier invoice data for inventory stock-in.',
     'Return strict JSON only with this exact shape:',
-    '{"supplierName":"","receiptCode":"","receiptDate":"","note":"","items":[{"rawName":"","qty":0,"buyPrice":0,"sellPrice":0}]}',
+    '{"supplierName":"","receiptCode":"","receiptDate":"","note":"","items":[{"rawName":"","qty":0,"buyPrice":0}]}',
     'Rules:',
-    '- qty, buyPrice, sellPrice must be numbers',
-    '- If sellPrice is missing, set it equal to buyPrice',
+    '- qty and buyPrice must be numbers',
+    '- Ignore sell price completely',
     '- receiptDate must be YYYY-MM-DD when possible',
     '- Use uppercase supplier and receipt text when possible',
     '- Invoice may be rotated, noisy, skewed, or partially cropped',
@@ -339,7 +339,7 @@ const extractJsonWithGemini = async (ocrText: string, apiKey: string, supplierHi
   let text = '';
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash-lite',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -366,7 +366,7 @@ const extractJsonWithGemini = async (ocrText: string, apiKey: string, supplierHi
         rawName: toUpper(String(item.rawName || '').trim()),
         qty: Number(item.qty || 0),
         buyPrice: Number(item.buyPrice || 0),
-        sellPrice: Number(item.sellPrice || item.buyPrice || 0),
+        sellPrice: 0,
       }))
       : [],
   };
@@ -488,7 +488,7 @@ export const invoiceExtract = onRequest(
             mappedProductId: match.mappedProductId,
             qty: item.qty,
             buyPrice: item.buyPrice,
-            sellPrice: item.sellPrice > 0 ? item.sellPrice : item.buyPrice,
+            sellPrice: 0,
             confidence: match.confidence,
             status: match.status,
             candidates: match.candidates,
