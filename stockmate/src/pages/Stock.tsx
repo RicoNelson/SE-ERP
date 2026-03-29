@@ -34,8 +34,10 @@ export default function Stock() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterLowStock, setFilterLowStock] = useState(false);
-  const [sortBy, setSortBy] = useState<'name' | 'sellPrice' | 'stockQty'>('name');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [sortBy, setSortBy] = useState<'updatedAt' | 'createdAt' | 'name' | 'sellPrice' | 'stockQty'>('updatedAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [filterCreatedAt, setFilterCreatedAt] = useState<'all' | 'today' | '7days' | '30days'>('all');
+  const [filterUpdatedAt, setFilterUpdatedAt] = useState<'all' | 'today' | '7days' | '30days'>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [productsPerPage, setProductsPerPage] = useState(10);
   const { userProfile, currentUser } = useAuth();
@@ -61,6 +63,29 @@ export default function Stock() {
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeletingProduct, setIsDeletingProduct] = useState(false);
   const normalizedSearchQuery = normalizeSearchQuery(searchQuery);
+  const toDateValue = (value: unknown): Date | null => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (typeof value === 'object' && value && 'toDate' in value && typeof (value as { toDate?: unknown }).toDate === 'function') {
+      return (value as { toDate: () => Date }).toDate();
+    }
+    return null;
+  };
+  const matchDateFilter = (value: unknown, filter: 'all' | 'today' | '7days' | '30days') => {
+    if (filter === 'all') return true;
+    const date = toDateValue(value);
+    if (!date) return false;
+
+    const now = new Date();
+    if (filter === 'today') {
+      return date.toDateString() === now.toDateString();
+    }
+
+    const days = filter === '7days' ? 7 : 30;
+    const threshold = new Date(now);
+    threshold.setDate(now.getDate() - days);
+    return date >= threshold && date <= now;
+  };
 
   useEffect(() => {
     if (!editingProduct?.id) {
@@ -145,13 +170,20 @@ export default function Stock() {
       const skuKey = normalizeSearchQuery(p.sku);
       const matchesSearch = nameKey.includes(normalizedSearchQuery) || skuKey.includes(normalizedSearchQuery);
       const matchesLowStock = filterLowStock ? p.stockQty <= p.lowStockThreshold : true;
-      return matchesSearch && matchesLowStock;
+      const matchesCreatedAt = matchDateFilter(p.createdAt, filterCreatedAt);
+      const matchesUpdatedAt = matchDateFilter(p.updatedAt, filterUpdatedAt);
+      return matchesSearch && matchesLowStock && matchesCreatedAt && matchesUpdatedAt;
     })
     .sort((a, b) => {
       const direction = sortOrder === 'asc' ? 1 : -1;
 
       if (sortBy === 'name') {
         return a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }) * direction;
+      }
+      if (sortBy === 'updatedAt' || sortBy === 'createdAt') {
+        const aTime = toDateValue(a[sortBy])?.getTime() || 0;
+        const bTime = toDateValue(b[sortBy])?.getTime() || 0;
+        return (aTime - bTime) * direction;
       }
 
       return (a[sortBy] - b[sortBy]) * direction;
@@ -163,7 +195,7 @@ export default function Stock() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, filterLowStock, sortBy, sortOrder, productsPerPage]);
+  }, [searchQuery, filterLowStock, filterCreatedAt, filterUpdatedAt, sortBy, sortOrder, productsPerPage]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -514,9 +546,11 @@ export default function Stock() {
           <div className="relative">
             <select
               value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as 'name' | 'sellPrice' | 'stockQty')}
+              onChange={(e) => setSortBy(e.target.value as 'updatedAt' | 'createdAt' | 'name' | 'sellPrice' | 'stockQty')}
               className="ai-select w-full appearance-none py-2.5 pl-4 pr-10 text-sm font-medium"
             >
+              <option value="updatedAt">Urutkan: Terakhir Diupdate</option>
+              <option value="createdAt">Urutkan: Tanggal Dibuat</option>
               <option value="name">Urutkan: Nama</option>
               <option value="sellPrice">Urutkan: Harga</option>
               <option value="stockQty">Urutkan: Stok</option>
@@ -530,8 +564,45 @@ export default function Stock() {
             className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-slate-700"
           >
             <ArrowUpDown className="h-4 w-4" />
-            {sortOrder === 'asc' ? 'A-Z / Kecil' : 'Z-A / Besar'}
+            {sortBy === 'name'
+              ? (sortOrder === 'asc' ? 'A-Z' : 'Z-A')
+              : (sortBy === 'updatedAt' || sortBy === 'createdAt')
+                ? (sortOrder === 'asc' ? 'Terlama' : 'Terbaru')
+                : (sortOrder === 'asc' ? 'Kecil-Besar' : 'Besar-Kecil')}
           </button>
+        </div>
+
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="relative">
+            <select
+              value={filterUpdatedAt}
+              onChange={(e) => setFilterUpdatedAt(e.target.value as 'all' | 'today' | '7days' | '30days')}
+              className="ai-select w-full appearance-none py-2.5 pl-4 pr-10 text-sm font-medium"
+            >
+              <option value="all">Filter Updated: Semua</option>
+              <option value="today">Filter Updated: Hari Ini</option>
+              <option value="7days">Filter Updated: 7 Hari</option>
+              <option value="30days">Filter Updated: 30 Hari</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+              <ChevronDown className="h-5 w-5" />
+            </div>
+          </div>
+          <div className="relative">
+            <select
+              value={filterCreatedAt}
+              onChange={(e) => setFilterCreatedAt(e.target.value as 'all' | 'today' | '7days' | '30days')}
+              className="ai-select w-full appearance-none py-2.5 pl-4 pr-10 text-sm font-medium"
+            >
+              <option value="all">Filter Created: Semua</option>
+              <option value="today">Filter Created: Hari Ini</option>
+              <option value="7days">Filter Created: 7 Hari</option>
+              <option value="30days">Filter Created: 30 Hari</option>
+            </select>
+            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+              <ChevronDown className="h-5 w-5" />
+            </div>
+          </div>
         </div>
 
         <div className="mt-3 grid grid-cols-[1fr_auto] gap-2">

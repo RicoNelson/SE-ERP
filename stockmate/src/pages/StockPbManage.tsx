@@ -298,6 +298,11 @@ export default function StockPbManage() {
         getDocs(itemsQuery),
         getDocs(layersQuery),
       ]);
+      const purchaseItemOrder = new Map<string, number>();
+      purchase.items.forEach((item, index) => {
+        if (!item.productId) return;
+        purchaseItemOrder.set(item.productId, index);
+      });
 
       const layerMap = new Map<string, { quantityReceived: number; quantityRemaining: number; soldQty: number }>();
       layersSnap.forEach((layerDoc) => {
@@ -330,6 +335,15 @@ export default function StockPbManage() {
           layerQuantityReceived: layer?.quantityReceived || quantity,
           soldFromLayer: layer?.soldQty || 0,
         };
+      }).sort((a, b) => {
+        const aOrder = purchaseItemOrder.get(a.productId);
+        const bOrder = purchaseItemOrder.get(b.productId);
+        const aHasOrder = typeof aOrder === 'number';
+        const bHasOrder = typeof bOrder === 'number';
+        if (aHasOrder && bHasOrder) return (aOrder as number) - (bOrder as number);
+        if (aHasOrder) return -1;
+        if (bHasOrder) return 1;
+        return 0;
       });
 
       if (itemsFromRows.length > 0) {
@@ -522,40 +536,149 @@ export default function StockPbManage() {
         const purchaseSnap = await transaction.get(purchaseRef);
         if (!purchaseSnap.exists()) throw new Error('PB tidak ditemukan.');
 
-        const nextPurchaseItems: PurchaseSummaryItem[] = [];
+        const preparedContexts: Array<{
+          item: (typeof preparedItems)[number];
+          productId: string;
+          productRef: ReturnType<typeof doc>;
+          currentStockQty: number;
+          pendingNewProduct: NormalizedProductInput | null;
+          nameKeyRef: ReturnType<typeof doc> | null;
+          layerId: string | null;
+          previousReceived: number;
+          soldQty: number;
+        }> = [];
+        const removedContexts: Array<{
+          removedItem: (typeof preparedRemovedItems)[number];
+          layerId: string;
+          layerRef: ReturnType<typeof doc>;
+          previousReceived: number;
+          productRef: ReturnType<typeof doc>;
+          nextStockQty: number | null;
+        }> = [];
 
+        // Firestore transactions require every read to happen before any write.
         for (const item of preparedItems) {
           let productId = item.productId;
           let productRef = doc(db, 'products', productId);
           let currentStockQty = 0;
+          let pendingNewProduct: NormalizedProductInput | null = null;
+          let nameKeyRef: ReturnType<typeof doc> | null = null;
+          let layerId: string | null = null;
+          let previousReceived = 0;
+          let soldQty = 0;
 
           if (item.pendingNewProduct) {
-            const normalized = item.pendingNewProduct;
-            const nameKeyRef = doc(db, 'product_name_keys', normalized.nameKey);
+            pendingNewProduct = item.pendingNewProduct;
+            nameKeyRef = doc(db, 'product_name_keys', pendingNewProduct.nameKey);
             const nameKeySnap = await transaction.get(nameKeyRef);
             if (nameKeySnap.exists()) {
-              throw new Error(`Produk "${normalized.name}" sudah terdaftar. Gunakan produk existing.`);
+              throw new Error(`Produk "${pendingNewProduct.name}" sudah terdaftar. Gunakan produk existing.`);
             }
 
             productRef = doc(collection(db, 'products'));
             productId = productRef.id;
-            transaction.set(productRef, toProductDocument(normalized));
+            currentStockQty = pendingNewProduct.stockQty;
+          } else {
+            const productSnap = await transaction.get(productRef);
+            if (!productSnap.exists()) throw new Error(`Produk ${item.productNameSnapshot} tidak ditemukan.`);
+            const productData = productSnap.data() as Product;
+            currentStockQty = productData.stockQty || 0;
+          }
+
+          if (!item.isNew) {
+            layerId = layerByProduct.get(item.productId) || null;
+            if (!layerId) throw new Error(`Layer FIFO PB untuk ${item.productNameSnapshot} tidak ditemukan.`);
+            const layerRef = doc(db, 'inventory_layers', layerId);
+            const layerSnapInside = await transaction.get(layerRef);
+            if (!layerSnapInside.exists()) throw new Error(`Layer FIFO PB untuk ${item.productNameSnapshot} tidak ditemukan.`);
+            const layerData = layerSnapInside.data();
+            previousReceived = Number(layerData.quantityReceived || item.originalQuantity || 0);
+            const previousRemaining = Number(layerData.quantityRemaining || 0);
+            soldQty = Math.max(previousReceived - previousRemaining, 0);
+
+            if (item.nextQuantity < soldQty) {
+              throw new Error(`Jumlah baru ${item.productNameSnapshot} tidak boleh kurang dari yang sudah terjual (${formatNumber(soldQty)}).`);
+            }
+          }
+
+          preparedContexts.push({
+            item,
+            productId,
+            productRef,
+            currentStockQty,
+            pendingNewProduct,
+            nameKeyRef,
+            layerId,
+            previousReceived,
+            soldQty,
+          });
+        }
+
+        for (const removedItem of preparedRemovedItems) {
+          const layerId = layerByProduct.get(removedItem.productId);
+          if (!layerId) continue;
+
+          const layerRef = doc(db, 'inventory_layers', layerId);
+          const layerSnapInside = await transaction.get(layerRef);
+          if (!layerSnapInside.exists()) continue;
+          const layerData = layerSnapInside.data();
+          const previousReceived = Number(layerData.quantityReceived || removedItem.originalQuantity || 0);
+          const previousRemaining = Number(layerData.quantityRemaining || 0);
+          const soldQty = Math.max(previousReceived - previousRemaining, 0);
+
+          if (soldQty > 0) {
+            throw new Error(`Produk ${removedItem.productNameSnapshot} tidak bisa dihapus dari PB karena sudah terjual ${formatNumber(soldQty)}.`);
+          }
+
+          const productRef = doc(db, 'products', removedItem.productId);
+          const productSnap = await transaction.get(productRef);
+          const nextStockQty = productSnap.exists()
+            ? Math.max(0, (((productSnap.data() as Product).stockQty) || 0) - previousReceived)
+            : null;
+
+          removedContexts.push({
+            removedItem,
+            layerId,
+            layerRef,
+            previousReceived,
+            productRef,
+            nextStockQty,
+          });
+        }
+
+        const nextPurchaseItems: PurchaseSummaryItem[] = [];
+
+        for (const context of preparedContexts) {
+          const {
+            item,
+            productId,
+            productRef,
+            pendingNewProduct,
+            nameKeyRef,
+            layerId,
+            previousReceived,
+            soldQty,
+          } = context;
+          let currentStockQty = context.currentStockQty;
+
+          if (pendingNewProduct) {
+            transaction.set(productRef, toProductDocument(pendingNewProduct));
+            if (!nameKeyRef) throw new Error('Gagal menyiapkan key produk baru.');
             transaction.set(nameKeyRef, {
               productId,
-              name: normalized.name,
+              name: pendingNewProduct.name,
               createdAt: serverTimestamp(),
             });
-            currentStockQty = normalized.stockQty;
 
-            if (normalized.stockQty > 0) {
+            if (pendingNewProduct.stockQty > 0) {
               const initialLayerRef = doc(collection(db, 'inventory_layers'));
               const initialMovementRef = doc(collection(db, 'stock_movements'));
               transaction.set(initialLayerRef, {
                 productId,
-                quantityReceived: normalized.stockQty,
-                quantityRemaining: normalized.stockQty,
-                unitCost: normalized.costPrice,
-                sellPriceSnapshot: normalized.sellPrice,
+                quantityReceived: pendingNewProduct.stockQty,
+                quantityRemaining: pendingNewProduct.stockQty,
+                unitCost: pendingNewProduct.costPrice,
+                sellPriceSnapshot: pendingNewProduct.sellPrice,
                 sourceType: 'initial_stock',
                 sourceId: productId,
                 receivedAt: serverTimestamp(),
@@ -565,8 +688,8 @@ export default function StockPbManage() {
               transaction.set(initialMovementRef, {
                 productId,
                 type: 'stock_in',
-                quantityChange: normalized.stockQty,
-                unitCost: normalized.costPrice,
+                quantityChange: pendingNewProduct.stockQty,
+                unitCost: pendingNewProduct.costPrice,
                 layerId: initialLayerRef.id,
                 referenceId: productId,
                 referenceType: 'initial_stock',
@@ -574,28 +697,10 @@ export default function StockPbManage() {
                 performedAt: serverTimestamp(),
               });
             }
-          } else {
-            const productSnap = await transaction.get(productRef);
-            if (!productSnap.exists()) throw new Error(`Produk ${item.productNameSnapshot} tidak ditemukan.`);
-            const productData = productSnap.data() as Product;
-            currentStockQty = productData.stockQty || 0;
           }
-
           if (!item.isNew) {
-            const layerId = layerByProduct.get(productId);
             if (!layerId) throw new Error(`Layer FIFO PB untuk ${item.productNameSnapshot} tidak ditemukan.`);
             const layerRef = doc(db, 'inventory_layers', layerId);
-            const layerSnapInside = await transaction.get(layerRef);
-            if (!layerSnapInside.exists()) throw new Error(`Layer FIFO PB untuk ${item.productNameSnapshot} tidak ditemukan.`);
-            const layerData = layerSnapInside.data();
-            const previousReceived = Number(layerData.quantityReceived || item.originalQuantity || 0);
-            const previousRemaining = Number(layerData.quantityRemaining || 0);
-            const soldQty = Math.max(previousReceived - previousRemaining, 0);
-
-            if (item.nextQuantity < soldQty) {
-              throw new Error(`Jumlah baru ${item.productNameSnapshot} tidak boleh kurang dari yang sudah terjual (${formatNumber(soldQty)}).`);
-            }
-
             const quantityDiff = item.nextQuantity - previousReceived;
             const nextRemaining = item.nextQuantity - soldQty;
 
@@ -706,28 +811,11 @@ export default function StockPbManage() {
           });
         }
 
-        for (const removedItem of preparedRemovedItems) {
-          const layerId = layerByProduct.get(removedItem.productId);
-          if (!layerId) continue;
-
-          const layerRef = doc(db, 'inventory_layers', layerId);
-          const layerSnapInside = await transaction.get(layerRef);
-          if (!layerSnapInside.exists()) continue;
-          const layerData = layerSnapInside.data();
-          const previousReceived = Number(layerData.quantityReceived || removedItem.originalQuantity || 0);
-          const previousRemaining = Number(layerData.quantityRemaining || 0);
-          const soldQty = Math.max(previousReceived - previousRemaining, 0);
-
-          if (soldQty > 0) {
-            throw new Error(`Produk ${removedItem.productNameSnapshot} tidak bisa dihapus dari PB karena sudah terjual ${formatNumber(soldQty)}.`);
-          }
-
-          const productRef = doc(db, 'products', removedItem.productId);
-          const productSnap = await transaction.get(productRef);
-          if (productSnap.exists()) {
-            const productData = productSnap.data() as Product;
+        for (const context of removedContexts) {
+          const { removedItem, layerId, layerRef, previousReceived, productRef, nextStockQty } = context;
+          if (nextStockQty !== null) {
             transaction.update(productRef, {
-              stockQty: Math.max(0, (productData.stockQty || 0) - previousReceived),
+              stockQty: nextStockQty,
               updatedAt: serverTimestamp(),
             });
           }
