@@ -266,7 +266,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
   };
 
   return (
-    <div className="ai-card space-y-4 p-4">
+    <div className={`ai-card space-y-4 p-4 ${isFocusOpen ? 'z-30 overflow-visible' : ''}`}>
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-slate-800">Item PB</p>
         <button
@@ -307,7 +307,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
               </p>
             )}
             {isFocusOpen && (
-              <div className="absolute z-10 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
+              <div className="absolute z-50 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
                 {suggestions.map((product) => (
                   <button
                     key={product.id}

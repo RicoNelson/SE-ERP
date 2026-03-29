@@ -976,7 +976,7 @@ export default function StockPbManage() {
                 const isActive = selectedPb?.id === purchase.id;
                 const isFullySold = fullySoldPbIds.has(purchase.id);
                 return (
-                  <div key={purchase.id} className="space-y-2">
+                  <div key={purchase.id} className={`relative space-y-2 ${isActive ? 'z-30' : 'z-0'}`}>
                     <button
                       onClick={() => {
                         if (isActive) {
@@ -1015,8 +1015,8 @@ export default function StockPbManage() {
                     </button>
 
                     {isActive && (
-                      <div className="mt-2">
-                        <section className="ai-card pb-inline-reveal space-y-3 p-5">
+                      <div className="relative z-20 mt-2">
+                        <section className="ai-card pb-inline-reveal space-y-3 overflow-visible p-5">
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Detail PB</p>
@@ -1119,7 +1119,7 @@ export default function StockPbManage() {
                           <div className="rounded-2xl border border-dashed border-slate-300 p-3">
                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Tambah Produk yang Terlewat</p>
                             {addProductMode === 'existing' ? (
-                              <div className="relative mt-3">
+                              <div className="relative z-30 mt-3">
                                 <div className="mb-1 flex items-center justify-between gap-3">
                                   <label className="block text-sm font-medium text-slate-700">Nama Produk *</label>
                     <button
@@ -1151,7 +1151,7 @@ export default function StockPbManage() {
                                   className="ai-input w-full px-4 py-3 text-sm"
                                 />
                                 {isAddProductFocusOpen && (
-                                  <div className="absolute z-10 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
+                                  <div className="absolute z-50 mt-2 max-h-56 w-full overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
                                     {filteredAddProductSuggestions.map((product) => (
                                       <button
                                         key={product.id}
