@@ -29,7 +29,7 @@ import {
   type ProductFormData,
 } from '../features/products/productForm';
 import { extractInvoiceDraft, type InvoiceExtractDraft } from '../lib/invoiceAi';
-import { formatDateId, formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
+import { formatDateId, formatNumber, formatProductName, handleFormattedInputChange, matchesFuzzySearch, normalizeSearchQuery, parseNumber } from '../utils/format';
 
 type StockAddTab = 'product' | 'pb';
 
@@ -68,7 +68,6 @@ interface PoRowFieldErrors {
 }
 
 const uppercaseInputValue = (value: string) => value.toLocaleUpperCase('id-ID');
-const trimEdgeWhitespace = (value: string) => value.trim();
 const toReceiptCodeDocId = (value: string): string =>
   normalizeSearchQuery(value)
     // Escape characters that can break Firestore document paths.
@@ -238,7 +237,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
     const queryText = normalizeSearchQuery(debouncedQuery);
     if (!queryText) return products.slice(0, 8);
     return products
-      .filter((item) => normalizeSearchQuery(item.name).includes(queryText) || normalizeSearchQuery(item.sku).includes(queryText))
+      .filter((item) => matchesFuzzySearch(queryText, [item.name, item.sku]))
       .slice(0, 8);
   }, [debouncedQuery, products]);
 
@@ -331,7 +330,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
                         selectedProductId: null,
                         inlineProductForm: {
                           ...row.inlineProductForm,
-                          name: uppercaseInputValue(trimEdgeWhitespace(row.productNameInput)),
+                          name: uppercaseInputValue(row.productNameInput),
                           costPrice: row.buyPrice,
                           sellPrice: row.sellPrice,
                           stockQty: '0',
@@ -425,7 +424,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
               onClick={() =>
                 onChange(row.id, {
                   inlineProductEnabled: false,
-                  productNameInput: trimEdgeWhitespace(row.inlineProductForm.name),
+                  productNameInput: row.inlineProductForm.name,
                 })
               }
               className="text-xs font-medium text-slate-600 hover:text-slate-800"
@@ -441,7 +440,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
                 const normalizedInlineProductForm = uppercaseProductFormInput(next);
                 onChange(row.id, {
                   inlineProductForm: normalizedInlineProductForm,
-                  productNameInput: trimEdgeWhitespace(normalizedInlineProductForm.name),
+                  productNameInput: normalizedInlineProductForm.name,
                   buyPrice: normalizedInlineProductForm.costPrice,
                   sellPrice: normalizedInlineProductForm.sellPrice,
                 });
@@ -718,7 +717,7 @@ export default function StockAdd() {
     const normalizedPatch: Partial<PoDraftRow> = {
       ...patch,
       ...(typeof patch.productNameInput === 'string'
-        ? { productNameInput: uppercaseInputValue(trimEdgeWhitespace(patch.productNameInput)) }
+        ? { productNameInput: uppercaseInputValue(patch.productNameInput) }
         : {}),
       ...(patch.inlineProductForm
         ? { inlineProductForm: uppercaseProductFormInput(patch.inlineProductForm) }

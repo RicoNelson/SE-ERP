@@ -3,7 +3,7 @@ import { collection, query, onSnapshot, orderBy, doc, serverTimestamp, runTransa
 import { db } from '../lib/firebase';
 import { Search, Plus, Edit2, X, Boxes, AlertTriangle, Sparkles, ChevronDown, ArrowUpDown, PackagePlus, Trash2, FileText } from 'lucide-react';
 import type { Product } from '../types';
-import { formatDateId, formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
+import { formatDateId, formatNumber, formatProductName, handleFormattedInputChange, matchesFuzzySearch, parseNumber } from '../utils/format';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -62,7 +62,6 @@ export default function Stock() {
   const [lowStockThresholdError, setLowStockThresholdError] = useState('');
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeletingProduct, setIsDeletingProduct] = useState(false);
-  const normalizedSearchQuery = normalizeSearchQuery(searchQuery);
   const toDateValue = (value: unknown): Date | null => {
     if (!value) return null;
     if (value instanceof Date) return value;
@@ -166,9 +165,7 @@ export default function Stock() {
 
   const filteredProducts = products
     .filter((p) => {
-      const nameKey = normalizeSearchQuery(p.name);
-      const skuKey = normalizeSearchQuery(p.sku);
-      const matchesSearch = nameKey.includes(normalizedSearchQuery) || skuKey.includes(normalizedSearchQuery);
+      const matchesSearch = matchesFuzzySearch(searchQuery, [p.name, p.sku]);
       const matchesLowStock = filterLowStock ? p.stockQty <= p.lowStockThreshold : true;
       const matchesCreatedAt = matchDateFilter(p.createdAt, filterCreatedAt);
       const matchesUpdatedAt = matchDateFilter(p.updatedAt, filterUpdatedAt);

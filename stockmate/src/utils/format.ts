@@ -48,6 +48,89 @@ export const normalizeSearchQuery = (value: string | undefined | null): string =
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('id-ID');
 };
 
+const isSubsequence = (needle: string, haystack: string): boolean => {
+  if (!needle) return true;
+  let needleIndex = 0;
+  for (let i = 0; i < haystack.length; i += 1) {
+    if (haystack[i] === needle[needleIndex]) {
+      needleIndex += 1;
+      if (needleIndex === needle.length) return true;
+    }
+  }
+  return false;
+};
+
+const levenshteinDistanceWithin = (source: string, target: string, maxDistance: number): boolean => {
+  const sourceLength = source.length;
+  const targetLength = target.length;
+
+  if (Math.abs(sourceLength - targetLength) > maxDistance) return false;
+  if (source === target) return true;
+
+  const previous = new Array(targetLength + 1).fill(0);
+  const current = new Array(targetLength + 1).fill(0);
+
+  for (let j = 0; j <= targetLength; j += 1) {
+    previous[j] = j;
+  }
+
+  for (let i = 1; i <= sourceLength; i += 1) {
+    current[0] = i;
+    let rowMin = current[0];
+
+    for (let j = 1; j <= targetLength; j += 1) {
+      const substitutionCost = source[i - 1] === target[j - 1] ? 0 : 1;
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + substitutionCost,
+      );
+      if (current[j] < rowMin) rowMin = current[j];
+    }
+
+    if (rowMin > maxDistance) return false;
+    for (let j = 0; j <= targetLength; j += 1) {
+      previous[j] = current[j];
+    }
+  }
+
+  return previous[targetLength] <= maxDistance;
+};
+
+const tokenMatches = (queryToken: string, candidateToken: string): boolean => {
+  if (candidateToken.includes(queryToken)) return true;
+  if (queryToken.length >= 3 && isSubsequence(queryToken, candidateToken)) return true;
+  if (queryToken.length < 3) return false;
+  const maxDistance = queryToken.length <= 4 ? 1 : 2;
+  return levenshteinDistanceWithin(queryToken, candidateToken, maxDistance);
+};
+
+const fuzzyMatchNormalized = (normalizedQuery: string, normalizedCandidate: string): boolean => {
+  if (!normalizedQuery) return true;
+  if (!normalizedCandidate) return false;
+  if (normalizedCandidate.includes(normalizedQuery)) return true;
+
+  const queryTokens = normalizedQuery.split(' ').filter(Boolean);
+  const candidateTokens = normalizedCandidate.split(' ').filter(Boolean);
+  if (!queryTokens.length || !candidateTokens.length) return false;
+
+  return queryTokens.every((queryToken) =>
+    candidateTokens.some((candidateToken) => tokenMatches(queryToken, candidateToken))
+    || tokenMatches(queryToken, normalizedCandidate),
+  );
+};
+
+export const matchesFuzzySearch = (
+  queryValue: string | undefined | null,
+  candidateValues: Array<string | undefined | null>,
+): boolean => {
+  const normalizedQuery = normalizeSearchQuery(queryValue);
+  if (!normalizedQuery) return true;
+  return candidateValues.some((candidateValue) =>
+    fuzzyMatchNormalized(normalizedQuery, normalizeSearchQuery(candidateValue)),
+  );
+};
+
 export const toDateValue = (value: unknown): Date | null => {
   if (!value) return null;
 

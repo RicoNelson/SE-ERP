@@ -16,7 +16,7 @@ import {
   type ProductFormData,
   type ProductFormFieldErrors,
 } from '../features/products/productForm';
-import { formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
+import { formatNumber, formatProductName, handleFormattedInputChange, matchesFuzzySearch, normalizeSearchQuery, parseNumber } from '../utils/format';
 
 interface PurchaseSummaryItem {
   purchaseItemId?: string;
@@ -63,6 +63,7 @@ export default function StockPbManage() {
   const [pbCurrentPage, setPbCurrentPage] = useState(1);
   const [selectedPb, setSelectedPb] = useState<PurchaseSummary | null>(null);
   const [pbEditableItems, setPbEditableItems] = useState<EditablePbItem[]>([]);
+  const [pbPendingMissingItems, setPbPendingMissingItems] = useState<EditablePbItem[]>([]);
   const [removedPbItems, setRemovedPbItems] = useState<EditablePbItem[]>([]);
   const [isPbDetailLoading, setIsPbDetailLoading] = useState(false);
   const [isPbSaving, setIsPbSaving] = useState(false);
@@ -204,8 +205,7 @@ export default function StockPbManage() {
   const searchFilteredPbList = pbList.filter((purchase) => {
     const keywordMatch = (() => {
       if (!normalizedPbSearchQuery) return true;
-      const haystack = normalizeSearchQuery(`${purchase.receiptCode || ''} ${purchase.supplierName || ''}`);
-      return haystack.includes(normalizedPbSearchQuery);
+      return matchesFuzzySearch(normalizedPbSearchQuery, [purchase.receiptCode, purchase.supplierName]);
     })();
 
     const dateMatch = (() => {
@@ -249,14 +249,15 @@ export default function StockPbManage() {
 
   const availableProductsForPb = products
     .filter((product): product is Product & { id: string } => Boolean(product.id))
-    .filter((product) => !pbEditableItems.some((item) => item.productId === product.id))
+    .filter((product) => (
+      !pbEditableItems.some((item) => item.productId === product.id)
+      && !pbPendingMissingItems.some((item) => item.productId === product.id)
+    ))
     .sort((a, b) => a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }));
 
   const filteredAddProductSuggestions = availableProductsForPb
     .filter((item) => {
-      const queryText = normalizeSearchQuery(pbAddProductQuery);
-      if (!queryText) return true;
-      return normalizeSearchQuery(item.name).includes(queryText) || normalizeSearchQuery(item.sku).includes(queryText);
+      return matchesFuzzySearch(pbAddProductQuery, [item.name, item.sku]);
     })
     .slice(0, 8);
   const addProductHasNoMatch = pbAddProductQuery.trim().length > 0 && filteredAddProductSuggestions.length === 0;
@@ -274,6 +275,7 @@ export default function StockPbManage() {
     setSelectedPb(purchase);
     setPbFieldError(null);
     setRemovedPbItems([]);
+    setPbPendingMissingItems([]);
     setAddProductMode('existing');
     setPbAddProductQuery('');
     setPbAddProductId(null);
@@ -397,11 +399,14 @@ export default function StockPbManage() {
         setPbFieldError('Produk tidak ditemukan.');
         return;
       }
-      if (pbEditableItems.some((item) => item.productId === productId)) {
+      if (
+        pbEditableItems.some((item) => item.productId === productId)
+        || pbPendingMissingItems.some((item) => item.productId === productId)
+      ) {
         setPbFieldError('Produk sudah ada di PB ini.');
         return;
       }
-      setPbEditableItems((prev) => ([
+      setPbPendingMissingItems((prev) => ([
         ...prev,
         {
           productId,
@@ -434,8 +439,19 @@ export default function StockPbManage() {
       setPbAddProductFormErrors({ name: 'Nama produk sudah ada. Gunakan produk existing.' });
       return;
     }
+    const duplicatePending = pbEditableItems.some((item) => (
+      toNameKey(item.productNameSnapshot) === normalizedProduct.nameKey
+      || item.pendingNewProduct?.nameKey === normalizedProduct.nameKey
+    )) || pbPendingMissingItems.some((item) => (
+      toNameKey(item.productNameSnapshot) === normalizedProduct.nameKey
+      || item.pendingNewProduct?.nameKey === normalizedProduct.nameKey
+    ));
+    if (duplicatePending) {
+      setPbAddProductFormErrors({ name: 'Produk dengan nama yang sama sudah ada di PB ini.' });
+      return;
+    }
     const temporaryProductId = `new-${crypto.randomUUID()}`;
-    setPbEditableItems((prev) => ([
+    setPbPendingMissingItems((prev) => ([
       ...prev,
       {
         productId: temporaryProductId,
@@ -454,6 +470,21 @@ export default function StockPbManage() {
     setPbAddQty('1');
     setPbAddBuyPrice('');
     setPbAddSellPrice('');
+    setPbFieldError(null);
+  };
+
+  const handleRemovePendingMissingItem = (productId: string) => {
+    setPbPendingMissingItems((prev) => prev.filter((item) => item.productId !== productId));
+    setPbFieldError(null);
+  };
+
+  const handleApplyPendingMissingItems = () => {
+    if (pbPendingMissingItems.length === 0) {
+      setPbFieldError('Belum ada produk terlewat yang ditambahkan.');
+      return;
+    }
+    setPbEditableItems((prev) => [...prev, ...pbPendingMissingItems]);
+    setPbPendingMissingItems([]);
     setPbFieldError(null);
   };
 
@@ -482,7 +513,8 @@ export default function StockPbManage() {
       return;
     }
     if (!selectedPb?.id || isPbSaving) return;
-    const invalidItem = pbEditableItems.find((item) => !item.draftQuantity.trim() || parseNumber(item.draftQuantity) <= 0);
+    const combinedEditableItems = [...pbEditableItems, ...pbPendingMissingItems];
+    const invalidItem = combinedEditableItems.find((item) => !item.draftQuantity.trim() || parseNumber(item.draftQuantity) <= 0);
     if (invalidItem) {
       setPbFieldError(`Jumlah item untuk produk "${invalidItem.productNameSnapshot}" wajib lebih dari 0.`);
       return;
@@ -495,7 +527,7 @@ export default function StockPbManage() {
       const receiptCode = selectedPb.receiptCode || '-';
       const supplierName = selectedPb.supplierName || '';
       const receiptDate = selectedPb.receiptDate || null;
-      const preparedItems = pbEditableItems.map((item) => {
+      const preparedItems = combinedEditableItems.map((item) => {
         const nextQuantity = parseNumber(item.draftQuantity);
         return {
           ...item,
@@ -858,6 +890,7 @@ export default function StockPbManage() {
       });
 
       alert('Perubahan PB berhasil disimpan.');
+      setPbPendingMissingItems([]);
       const refreshedList = await loadPbList();
       const refreshedSelected = refreshedList.find((item) => item.id === selectedPb.id) || selectedPb;
       await loadPbDetail(refreshedSelected);
@@ -1261,8 +1294,42 @@ export default function StockPbManage() {
                               className="ai-button mt-2 inline-flex items-center gap-2 px-3 py-2 text-xs font-semibold"
                             >
                               <PackagePlus className="h-4 w-4" />
-                              Tambahkan ke PB
+                              Tambah ke Daftar Terlewat
                             </button>
+                            {pbPendingMissingItems.length > 0 && (
+                              <div className="mt-3 rounded-2xl border border-sky-200 bg-sky-50/70 p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-sky-700">
+                                    Daftar Produk Terlewat ({formatNumber(pbPendingMissingItems.length)})
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={handleApplyPendingMissingItems}
+                                    className="ai-button px-3 py-1.5 text-[11px] font-semibold"
+                                  >
+                                    Masukkan ke PB
+                                  </button>
+                                </div>
+                                <div className="mt-2 space-y-2">
+                                  {pbPendingMissingItems.map((pendingItem) => (
+                                    <div key={`pending-${pendingItem.productId}`} className="flex items-center justify-between gap-3 rounded-xl border border-sky-200 bg-white px-3 py-2">
+                                      <p className="text-sm font-medium text-slate-900">
+                                        {formatProductName(pendingItem.productNameSnapshot)}
+                                        {' • '}Qty {formatNumber(parseNumber(pendingItem.draftQuantity))}
+                                        {' • '}Modal Rp {formatNumber(pendingItem.unitCost)}
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemovePendingMissingItem(pendingItem.productId)}
+                                        className="ai-button-ghost px-2 py-1 text-xs font-semibold text-rose-600"
+                                      >
+                                        Hapus
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -1273,7 +1340,7 @@ export default function StockPbManage() {
                         {userRole === 'owner' && (
                           <button
                             onClick={handleSavePbAdjustments}
-                            disabled={isPbSaving || isPbDetailLoading || (pbEditableItems.length === 0 && removedPbItems.length === 0)}
+                            disabled={isPbSaving || isPbDetailLoading || ((pbEditableItems.length + pbPendingMissingItems.length) === 0 && removedPbItems.length === 0)}
                             className="ai-button w-full px-4 py-3 font-semibold disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {isPbSaving ? 'MENYIMPAN PERUBAHAN...' : 'SIMPAN PERUBAHAN PB'}
