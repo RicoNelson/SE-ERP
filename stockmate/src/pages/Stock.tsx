@@ -494,6 +494,12 @@ export default function Stock() {
     }
   };
 
+  const closeActionMenu = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return;
+    const details = target.closest('details');
+    if (details) details.removeAttribute('open');
+  };
+
   return (
     <div className="ai-page page-enter">
       <section className="ai-card ai-page-hero stagger-fade-in">
@@ -671,38 +677,84 @@ export default function Stock() {
                   </div>
                   {userRole === 'owner' && (
                     <div className="flex items-center gap-2">
-                      <button
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          navigate(`/stock/add?tab=pb&productId=${product.id}`);
-                        }}
-                        className="ai-button inline-flex items-center gap-2 px-3 py-2 text-sm font-medium"
-                      >
-                        <PackagePlus className="h-4 w-4" />
-                        Tambah PB
-                      </button>
-                      <button 
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setEditingProduct(product);
-                          setOpnameQty(product.stockQty.toString());
-                          setOpnameFieldErrors({});
-                        }}
-                        className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-sky-700"
-                      >
-                        <Edit2 className="h-4 w-4" />
-                        Opname
-                      </button>
-                      <button
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setProductToDelete(product);
-                        }}
-                        className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-rose-600"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        Hapus
-                      </button>
+                      <div className="hidden md:flex md:items-center md:gap-2">
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            navigate(`/stock/add?tab=pb&productId=${product.id}`);
+                          }}
+                          className="ai-button inline-flex items-center gap-2 px-3 py-2 text-sm font-medium"
+                        >
+                          <PackagePlus className="h-4 w-4" />
+                          Tambah PB
+                        </button>
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setEditingProduct(product);
+                            setOpnameQty(product.stockQty.toString());
+                            setOpnameFieldErrors({});
+                          }}
+                          className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-sky-700"
+                        >
+                          <Edit2 className="h-4 w-4" />
+                          Opname
+                        </button>
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setProductToDelete(product);
+                          }}
+                          className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-rose-600"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Hapus
+                        </button>
+                      </div>
+
+                      <details className="relative md:hidden" onClick={(event) => event.stopPropagation()}>
+                        <summary className="ai-button-ghost flex list-none items-center gap-1 rounded-full px-3 py-2 text-sm font-medium text-slate-700 [&::-webkit-details-marker]:hidden">
+                          Aksi
+                          <ChevronDown className="h-4 w-4" />
+                        </summary>
+                        <div className="absolute right-0 z-20 mt-2 w-40 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_16px_30px_rgba(15,23,42,0.16)]">
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              closeActionMenu(event.target);
+                              navigate(`/stock/add?tab=pb&productId=${product.id}`);
+                            }}
+                            className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            <PackagePlus className="h-4 w-4" />
+                            Tambah PB
+                          </button>
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              closeActionMenu(event.target);
+                              setEditingProduct(product);
+                              setOpnameQty(product.stockQty.toString());
+                              setOpnameFieldErrors({});
+                            }}
+                            className="mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-sky-700 hover:bg-sky-50"
+                          >
+                            <Edit2 className="h-4 w-4" />
+                            Opname
+                          </button>
+                          <button
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              closeActionMenu(event.target);
+                              setProductToDelete(product);
+                            }}
+                            className="mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-rose-600 hover:bg-rose-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Hapus
+                          </button>
+                        </div>
+                      </details>
                     </div>
                   )}
                 </div>

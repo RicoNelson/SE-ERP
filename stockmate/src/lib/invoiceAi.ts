@@ -35,6 +35,13 @@ export interface InvoiceExtractResponse {
   draft: InvoiceExtractDraft;
 }
 
+interface InvoiceExtractErrorResponse {
+  error?: string;
+  message?: string;
+  limit?: number;
+  retryAfterSeconds?: number;
+}
+
 const INVOICE_EXTRACT_URL = import.meta.env.VITE_INVOICE_EXTRACT_URL as string | undefined;
 
 export const extractInvoiceDraft = async (payload: InvoiceExtractRequest): Promise<InvoiceExtractResponse> => {
@@ -53,13 +60,21 @@ export const extractInvoiceDraft = async (payload: InvoiceExtractRequest): Promi
     }),
   });
 
-  const data = await response.json().catch(() => ({}));
+  const data = await response.json().catch(() => ({})) as InvoiceExtractErrorResponse | InvoiceExtractResponse;
   if (!response.ok) {
-    const message = typeof data?.message === 'string' ? data.message : `HTTP ${response.status}`;
+    if ((data as InvoiceExtractErrorResponse).error === 'invoice_extract_monthly_limit') {
+      const limit = (data as InvoiceExtractErrorResponse).limit || 250;
+      throw new Error(`Batas extract invoice bulanan sudah tercapai (${limit}x).`);
+    }
+    if ((data as InvoiceExtractErrorResponse).error === 'gemini_quota_exceeded') {
+      const retryAfterSeconds = (data as InvoiceExtractErrorResponse).retryAfterSeconds || 30;
+      throw new Error(`Kuota Gemini sedang habis. Coba lagi dalam ${retryAfterSeconds} detik.`);
+    }
+    const message = typeof (data as InvoiceExtractErrorResponse).message === 'string' ? (data as InvoiceExtractErrorResponse).message : `HTTP ${response.status}`;
     throw new Error(message);
   }
 
-  if (!data?.draftId) {
+  if (!(data as InvoiceExtractResponse)?.draftId) {
     throw new Error('Respons AI draft tidak valid.');
   }
 

@@ -13,9 +13,9 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { FirebaseError } from 'firebase/app';
-import { ref, uploadBytes } from 'firebase/storage';
+import { deleteObject, ref, uploadBytes } from 'firebase/storage';
 import { ArrowLeft, Camera, PackagePlus, Plus, Trash2 } from 'lucide-react';
-import { db, storage } from '../lib/firebase';
+import { db, storage, storageBucket } from '../lib/firebase';
 import type { Product } from '../types';
 import ProductFormFields from '../components/ProductFormFields';
 import { useAuth } from '../contexts/AuthContext';
@@ -149,6 +149,38 @@ const toSafeFileName = (fileName: string): string =>
     .replace(/[^a-zA-Z0-9._-]/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
+
+const MAX_INVOICE_IMAGE_BYTES = 10 * 1024 * 1024;
+
+const getInvoiceImportErrorMessage = (error: unknown): string => {
+  if (!(error instanceof FirebaseError)) {
+    return error instanceof Error ? `Import invoice gagal: ${error.message}` : 'Import invoice gagal.';
+  }
+  if (error.code === 'storage/unauthorized') {
+    return 'Import invoice gagal: akun tidak punya izin upload ke Firebase Storage. Perbarui Firebase Storage Rules untuk mengizinkan upload ke path invoice-uploads/{uid} milik user login.';
+  }
+  if (error.code !== 'storage/unknown') {
+    return `Import invoice gagal: ${error.message}`;
+  }
+
+  const customData = error.customData as { serverResponse?: string } | undefined;
+  const rawServerResponse = typeof customData?.serverResponse === 'string' ? customData.serverResponse : '';
+  let serverMessage = '';
+  if (rawServerResponse) {
+    try {
+      const parsed = JSON.parse(rawServerResponse) as { error?: { message?: string } };
+      serverMessage = parsed?.error?.message ? String(parsed.error.message) : rawServerResponse;
+    } catch {
+      serverMessage = rawServerResponse;
+    }
+  }
+
+  const suffix = serverMessage ? ` Detail server: ${serverMessage}.` : '';
+  if (!storageBucket) {
+    return `Import invoice gagal: VITE_FIREBASE_STORAGE_BUCKET belum valid atau kosong.${suffix}`;
+  }
+  return `Import invoice gagal: upload ke Firebase Storage ditolak atau konfigurasi bucket tidak sesuai (${storageBucket}).${suffix}`;
+};
 
 const buildPoDraftFromAi = (draft: InvoiceExtractDraft, products: Product[]): PoDraftState => {
   const rows = Array.isArray(draft.rows) ? draft.rows : [];
@@ -475,7 +507,8 @@ export default function StockAdd() {
   const [hasAppliedAiDraftPrefill, setHasAppliedAiDraftPrefill] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
   const [isImportingInvoice, setIsImportingInvoice] = useState(false);
-  const invoiceFileInputRef = useRef<HTMLInputElement | null>(null);
+  const invoiceCameraInputRef = useRef<HTMLInputElement | null>(null);
+  const invoiceGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const { currentUser } = useAuth();
   const hasUnsavedChanges = hasProductFormChanges(productForm) || hasMeaningfulPbData(poDraft);
 
@@ -608,13 +641,17 @@ export default function StockAdd() {
     };
   }, [searchParams, products, poDraft, hasAppliedAiDraftPrefill, setSearchParams]);
 
-  const handlePickInvoicePhoto = () => {
+  const handlePickInvoicePhoto = (source: 'camera' | 'gallery') => {
     if (isImportingInvoice) return;
     if (!currentUser) {
       setPoFormError('Silakan login ulang untuk import invoice.');
       return;
     }
-    invoiceFileInputRef.current?.click();
+    if (source === 'camera') {
+      invoiceCameraInputRef.current?.click();
+      return;
+    }
+    invoiceGalleryInputRef.current?.click();
   };
 
   const handleInvoicePhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -629,14 +666,19 @@ export default function StockAdd() {
       setPoFormError('File harus berupa gambar invoice.');
       return;
     }
+    if (file.size > MAX_INVOICE_IMAGE_BYTES) {
+      setPoFormError('Ukuran gambar invoice maksimal 10 MB.');
+      return;
+    }
 
     setPoFormError('');
     setIsImportingInvoice(true);
+    let uploadRef: ReturnType<typeof ref> | null = null;
     try {
       const idToken = await currentUser.getIdToken();
       const safeName = toSafeFileName(file.name || 'invoice.jpg');
       const imagePath = `invoice-uploads/${currentUser.uid}/${Date.now()}-${safeName}`;
-      const uploadRef = ref(storage, imagePath);
+      uploadRef = ref(storage, imagePath);
       await uploadBytes(uploadRef, file, {
         contentType: file.type || 'image/jpeg',
       });
@@ -653,8 +695,13 @@ export default function StockAdd() {
         return next;
       });
     } catch (error) {
-      setPoFormError(error instanceof Error ? `Import invoice gagal: ${error.message}` : 'Import invoice gagal.');
+      setPoFormError(getInvoiceImportErrorMessage(error));
     } finally {
+      if (uploadRef) {
+        void deleteObject(uploadRef).catch((cleanupError) => {
+          console.error(cleanupError);
+        });
+      }
       setIsImportingInvoice(false);
     }
   };
@@ -1248,25 +1295,42 @@ export default function StockAdd() {
       {tab === 'pb' && (
         <section className="mt-4 space-y-4 pb-24">
           <input
-            ref={invoiceFileInputRef}
+            ref={invoiceCameraInputRef}
             type="file"
             accept="image/*"
             capture="environment"
             className="hidden"
             onChange={handleInvoicePhotoChange}
           />
+          <input
+            ref={invoiceGalleryInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleInvoicePhotoChange}
+          />
           <div className="ai-card space-y-4 p-5">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-base font-semibold text-slate-900">Header Pembelian Barang</h3>
-              <button
-                type="button"
-                onClick={handlePickInvoicePhoto}
-                disabled={isImportingInvoice || isSavingPo}
-                className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Camera className="h-4 w-4" />
-                {isImportingInvoice ? 'Memproses Invoice...' : 'Foto Invoice'}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handlePickInvoicePhoto('camera')}
+                  disabled={isImportingInvoice || isSavingPo}
+                  className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Camera className="h-4 w-4" />
+                  {isImportingInvoice ? 'Memproses...' : 'Kamera'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handlePickInvoicePhoto('gallery')}
+                  disabled={isImportingInvoice || isSavingPo}
+                  className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isImportingInvoice ? 'Memproses...' : 'Pilih File'}
+                </button>
+              </div>
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Kode Struk *</label>

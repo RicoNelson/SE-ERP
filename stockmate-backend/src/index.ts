@@ -16,6 +16,7 @@ const visionClient = new vision.ImageAnnotatorClient();
 const db = getFirestore();
 const auth = getAuth();
 const storage = getStorage();
+const MONTHLY_INVOICE_EXTRACT_LIMIT = 250;
 
 interface InvoiceExtractBody {
   imagePath?: string;
@@ -61,6 +62,12 @@ interface MappedInvoiceRow {
   confidence: number;
   status: MatchStatus;
   candidates: Candidate[];
+}
+
+interface GeminiRequestError extends Error {
+  statusCode?: number;
+  retryAfterSeconds?: number;
+  responseBody?: string;
 }
 
 const normalizeText = (value: string): string =>
@@ -124,6 +131,68 @@ const safeJsonParse = <T>(text: string): T => {
     .replace(/```$/i, '')
     .trim();
   return JSON.parse(cleaned) as T;
+};
+
+const parseRetryAfterSeconds = (responseText: string): number | undefined => {
+  const jsonMatch = responseText.match(/"retryDelay"\s*:\s*"(\d+)s"/i);
+  if (jsonMatch) return Number(jsonMatch[1]);
+  const plainMatch = responseText.match(/retry in\s+(\d+(\.\d+)?)s/i);
+  if (!plainMatch) return undefined;
+  return Math.ceil(Number(plainMatch[1]));
+};
+
+const buildGeminiRequestError = (statusCode: number, responseText: string): GeminiRequestError => {
+  const fallbackMessage = `Gemini request failed: ${statusCode}`;
+  const messageFromJson = (() => {
+    try {
+      const parsed = JSON.parse(responseText) as { error?: { message?: string } };
+      return parsed.error?.message?.trim() || '';
+    } catch {
+      return '';
+    }
+  })();
+  const error = new Error(messageFromJson ? `Gemini request failed: ${messageFromJson}` : fallbackMessage) as GeminiRequestError;
+  error.statusCode = statusCode;
+  error.retryAfterSeconds = parseRetryAfterSeconds(responseText);
+  error.responseBody = responseText;
+  return error;
+};
+
+const getCurrentMonthKey = (): string => {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date());
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  if (!year || !month) return new Date().toISOString().slice(0, 7);
+  return `${year}-${month}`;
+};
+
+const reserveInvoiceExtractQuota = async (): Promise<{ monthKey: string; usedBefore: number; limit: number }> => {
+  const monthKey = getCurrentMonthKey();
+  const usageRef = db.collection('system_counters').doc(`invoice_extract_${monthKey}`);
+  let usedBefore = 0;
+
+  await db.runTransaction(async (transaction) => {
+    const usageSnap = await transaction.get(usageRef);
+    usedBefore = Number(usageSnap.get('count') || 0);
+    if (usedBefore >= MONTHLY_INVOICE_EXTRACT_LIMIT) {
+      throw new Error('MONTHLY_INVOICE_EXTRACT_LIMIT_REACHED');
+    }
+    const nextCount = usedBefore + 1;
+    transaction.set(usageRef, {
+      counterType: 'invoice_extract',
+      monthKey,
+      count: nextCount,
+      limit: MONTHLY_INVOICE_EXTRACT_LIMIT,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(usageSnap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+    }, { merge: true });
+  });
+
+  return { monthKey, usedBefore, limit: MONTHLY_INVOICE_EXTRACT_LIMIT };
 };
 
 const jaccardScore = (a: string, b: string): number => {
@@ -246,7 +315,7 @@ const extractJsonWithGemini = async (ocrText: string, apiKey: string, supplierHi
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(`Gemini request failed: ${response.status} ${message}`);
+    throw buildGeminiRequestError(response.status, message);
   }
 
   const data = (await response.json()) as {
@@ -338,6 +407,20 @@ export const invoiceExtract = onRequest(
         return;
       }
 
+      try {
+        await reserveInvoiceExtractQuota();
+      } catch (quotaError) {
+        if (quotaError instanceof Error && quotaError.message === 'MONTHLY_INVOICE_EXTRACT_LIMIT_REACHED') {
+          sendJson(res, 429, {
+            error: 'invoice_extract_monthly_limit',
+            message: `Batas bulanan extract invoice sudah tercapai (${MONTHLY_INVOICE_EXTRACT_LIMIT}/bulan).`,
+            limit: MONTHLY_INVOICE_EXTRACT_LIMIT,
+          });
+          return;
+        }
+        throw quotaError;
+      }
+
       const body = (req.body || {}) as InvoiceExtractBody;
       const imagePath = String(body.imagePath || '').trim();
       if (!imagePath) {
@@ -418,6 +501,18 @@ export const invoiceExtract = onRequest(
     } catch (error) {
       logger.error('invoiceExtract failed', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
+      const statusCode = typeof (error as GeminiRequestError)?.statusCode === 'number'
+        ? (error as GeminiRequestError).statusCode!
+        : 500;
+      if (statusCode === 429) {
+        const retryAfterSeconds = (error as GeminiRequestError).retryAfterSeconds;
+        sendJson(res, 429, {
+          error: 'gemini_quota_exceeded',
+          message: 'Kuota Gemini API habis atau belum aktif untuk model yang dipakai. Cek billing/tier project atau ganti model.',
+          retryAfterSeconds: retryAfterSeconds || 30,
+        });
+        return;
+      }
       sendJson(res, 500, { error: 'invoice_extract_failed', message });
     }
   },

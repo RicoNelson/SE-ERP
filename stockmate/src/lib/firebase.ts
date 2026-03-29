@@ -4,12 +4,29 @@ import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
+const normalizeStorageBucket = (value: string | undefined): string => {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const bucketFromApiUrl = trimmed.match(/\/b\/([^/]+)\//i)?.[1];
+  if (bucketFromApiUrl) return bucketFromApiUrl;
+  return trimmed
+    .replace(/^gs:\/\//i, '')
+    .replace(/^https?:\/\/storage\.googleapis\.com\//i, '')
+    .replace(/^https?:\/\/firebasestorage\.googleapis\.com\/v0\/b\//i, '')
+    .replace(/\/o(?:\/.*)?$/i, '')
+    .replace(/\/+$/g, '')
+    .replace(/\/.*$/, '');
+};
+
+const normalizedStorageBucket = normalizeStorageBucket(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET);
+
 // Your web app's Firebase configuration
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  storageBucket: normalizedStorageBucket || undefined,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
@@ -35,4 +52,5 @@ setPersistence(auth, browserLocalPersistence)
   });
 
 export const db = getFirestore(app);
-export const storage = getStorage(app);
+export const storageBucket = normalizedStorageBucket;
+export const storage = normalizedStorageBucket ? getStorage(app, `gs://${normalizedStorageBucket}`) : getStorage(app);
