@@ -1,4 +1,5 @@
 import vision from '@google-cloud/vision';
+import { GoogleGenAI } from '@google/genai';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore, type QueryDocumentSnapshot } from 'firebase-admin/firestore';
@@ -158,6 +159,39 @@ const buildGeminiRequestError = (statusCode: number, responseText: string): Gemi
   return error;
 };
 
+const buildGeminiSdkError = (error: unknown): GeminiRequestError => {
+  const original = error instanceof Error ? error : new Error('Gemini request failed: unknown error');
+  const sdkError = original as GeminiRequestError & {
+    status?: number;
+    code?: number | string;
+    cause?: unknown;
+  };
+  const statusCode = typeof sdkError.statusCode === 'number'
+    ? sdkError.statusCode
+    : typeof sdkError.status === 'number'
+      ? sdkError.status
+      : typeof sdkError.code === 'number'
+        ? sdkError.code
+        : undefined;
+  const body = sdkError.message || '';
+  const normalized = new Error(`Gemini request failed: ${body || 'unknown error'}`) as GeminiRequestError;
+  normalized.statusCode = statusCode;
+  normalized.retryAfterSeconds = parseRetryAfterSeconds(body);
+  normalized.responseBody = body;
+  if (!normalized.statusCode) {
+    const lowered = body.toLocaleLowerCase('id-ID');
+    if (
+      lowered.includes('429') ||
+      lowered.includes('quota') ||
+      lowered.includes('resource_exhausted') ||
+      lowered.includes('rate limit')
+    ) {
+      normalized.statusCode = 429;
+    }
+  }
+  return normalized;
+};
+
 const getCurrentMonthKey = (): string => {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Jakarta',
@@ -301,29 +335,22 @@ const extractJsonWithGemini = async (ocrText: string, apiKey: string, supplierHi
     ocrText.slice(0, 24000),
   ].join('\n');
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      generationConfig: {
+  const ai = new GoogleGenAI({ apiKey });
+  let text = '';
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash',
+      contents: prompt,
+      config: {
         responseMimeType: 'application/json',
         temperature: 0.1,
       },
-      contents: [{ parts: [{ text: prompt }] }],
-    }),
-  });
-
-  if (!response.ok) {
-    const message = await response.text();
-    throw buildGeminiRequestError(response.status, message);
+    });
+    text = String(response.text || '').trim();
+  } catch (error) {
+    throw buildGeminiSdkError(error);
   }
 
-  const data = (await response.json()) as {
-    candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
-    }>;
-  };
-  const text = data.candidates?.[0]?.content?.parts?.map((item) => item.text || '').join('\n').trim() || '';
   if (!text) throw new Error('Gemini returned empty response');
   const parsed = safeJsonParse<ParsedInvoiceResult>(text);
   const fallbackSupplierName = extractSupplierFallback(ocrText);
