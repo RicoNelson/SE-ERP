@@ -972,7 +972,10 @@ export default function StockPbManage() {
                             {purchase.receiptDate ? purchase.receiptDate.toLocaleDateString('id-ID') : '-'}
                           </p>
                         </div>
-                        <p className="text-xs font-semibold text-slate-700">Rp {formatNumber(purchase.totalAmount || 0)}</p>
+                        <div className="text-right">
+                          <p className="text-xs font-semibold text-slate-700">Rp {formatNumber(purchase.totalAmount || 0)}</p>
+                          <p className="mt-1 text-sm font-semibold text-slate-700">{formatNumber(purchase.items.length)} Produk</p>
+                        </div>
                       </div>
                     </button>
 

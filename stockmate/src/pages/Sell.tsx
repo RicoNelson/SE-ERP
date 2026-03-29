@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Search, Trash2, Edit3, ChevronDown, ShoppingBag, CreditCard } from 'lucide-react';
-import { doc, serverTimestamp, collection, runTransaction, query, where, getDocs, type DocumentReference } from 'firebase/firestore';
+import { doc, serverTimestamp, collection, runTransaction, query, where, getDocs, Timestamp, type DocumentReference } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Product, InventoryLayer, FifoAllocation } from '../types';
@@ -27,11 +27,25 @@ const PAYMENT_METHODS = [
   'Tunai'
 ];
 
+const toDateInputValue = (date: Date) => {
+  const yyyy = date.getFullYear();
+  const mm = `${date.getMonth() + 1}`.padStart(2, '0');
+  const dd = `${date.getDate()}`.padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+};
+
+const parseSaleDateInput = (value: string) => {
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 export default function Sell() {
+  const today = toDateInputValue(new Date());
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<string>('QRIS');
+  const [soldDate, setSoldDate] = useState(today);
   const [saleFormError, setSaleFormError] = useState('');
   const [saleRowErrors, setSaleRowErrors] = useState<Record<string, SaleRowErrors>>({});
   const { currentUser } = useAuth();
@@ -134,6 +148,14 @@ export default function Sell() {
     if (cart.length === 0 || isProcessing) return;
     setSaleFormError('');
     setSaleRowErrors({});
+    const parsedSoldDate = parseSaleDateInput(soldDate);
+    if (!parsedSoldDate) {
+      setSaleFormError('Tanggal terjual wajib diisi.');
+      return;
+    }
+    const now = new Date();
+    parsedSoldDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+    const soldAtTimestamp = Timestamp.fromDate(parsedSoldDate);
 
     const cartWithParsedQty = cart.map((item) => ({
       ...item,
@@ -329,7 +351,7 @@ export default function Sell() {
             referenceId: saleRef.id,
             referenceType: 'sale',
             performedBy: currentUser?.uid || 'unknown',
-            performedAt: serverTimestamp(),
+            performedAt: soldAtTimestamp,
             fifoAllocations: prepared.fifoAllocations,
             totalCost: prepared.totalCost,
             totalRevenue: prepared.totalRevenue,
@@ -345,7 +367,8 @@ export default function Sell() {
           total: computedSaleTotal,
           paymentMethod: paymentMethod,
           soldBy: currentUser?.uid || 'unknown',
-          soldAt: serverTimestamp()
+          soldAt: soldAtTimestamp,
+          createdAt: serverTimestamp(),
         });
       });
 
@@ -386,6 +409,19 @@ export default function Sell() {
               </span>
               <span className="flex-1 text-base font-medium text-slate-700">Cari nama produk atau SKU</span>
             </button>
+            <div className="mt-4">
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-500">Tanggal Terjual</label>
+              <input
+                type="date"
+                className="ai-input w-full px-3 py-2.5 font-medium"
+                value={soldDate}
+                onChange={(e) => {
+                  setSoldDate(e.target.value);
+                  setSaleFormError('');
+                }}
+                disabled={isProcessing}
+              />
+            </div>
           </section>
         </div>
 
