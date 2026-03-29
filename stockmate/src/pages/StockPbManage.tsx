@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { collection, doc, getDocs, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, where } from 'firebase/firestore';
 import { ArrowLeft, PackagePlus, Search, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -100,7 +100,7 @@ export default function StockPbManage() {
     return null;
   };
 
-  const loadPbList = async () => {
+  const loadPbList = useCallback(async () => {
     if (!currentUser?.uid) return [] as PurchaseSummary[];
     setIsPbListLoading(true);
     try {
@@ -191,11 +191,11 @@ export default function StockPbManage() {
     } finally {
       setIsPbListLoading(false);
     }
-  };
+  }, [currentUser?.uid, products]);
 
   useEffect(() => {
     void loadPbList();
-  }, [currentUser?.uid, products]);
+  }, [loadPbList]);
 
   useEffect(() => {
     setPbCurrentPage(1);

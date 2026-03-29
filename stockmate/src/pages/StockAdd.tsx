@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useBeforeUnload, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   collection,
   type DocumentReference,
   doc,
+  getDoc,
   onSnapshot,
   orderBy,
   query,
@@ -12,8 +13,9 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { FirebaseError } from 'firebase/app';
-import { ArrowLeft, PackagePlus, Plus, Trash2 } from 'lucide-react';
-import { db } from '../lib/firebase';
+import { ref, uploadBytes } from 'firebase/storage';
+import { ArrowLeft, Camera, PackagePlus, Plus, Trash2 } from 'lucide-react';
+import { db, storage } from '../lib/firebase';
 import type { Product } from '../types';
 import ProductFormFields from '../components/ProductFormFields';
 import { useAuth } from '../contexts/AuthContext';
@@ -26,6 +28,7 @@ import {
   type ProductFormFieldErrors,
   type ProductFormData,
 } from '../features/products/productForm';
+import { extractInvoiceDraft, type InvoiceExtractDraft } from '../lib/invoiceAi';
 import { formatDateId, formatNumber, formatProductName, handleFormattedInputChange, normalizeSearchQuery, parseNumber } from '../utils/format';
 
 type StockAddTab = 'product' | 'pb';
@@ -129,6 +132,49 @@ const hasMeaningfulPbData = (draft: PoDraftState): boolean =>
       || row.inlineProductEnabled,
     ),
   );
+
+const isEmptyPoDraft = (draft: PoDraftState): boolean =>
+  draft.rows.length === 1
+  && !draft.rows[0].selectedProductId
+  && !draft.rows[0].productNameInput
+  && !draft.rows[0].qty
+  && !draft.rows[0].buyPrice
+  && !draft.rows[0].sellPrice
+  && !draft.receiptCode.trim()
+  && !draft.supplierName.trim()
+  && !draft.note.trim();
+
+const toSafeFileName = (fileName: string): string =>
+  fileName
+    .replace(/[^a-zA-Z0-9._-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+const buildPoDraftFromAi = (draft: InvoiceExtractDraft, products: Product[]): PoDraftState => {
+  const rows = Array.isArray(draft.rows) ? draft.rows : [];
+  const mappedRows: PoDraftRow[] = rows.map((row) => {
+    const found = row.mappedProductId ? products.find((item) => item.id === row.mappedProductId) : null;
+    return {
+      id: crypto.randomUUID(),
+      productNameInput: found ? formatProductName(found.name) : uppercaseInputValue(row.rawName || ''),
+      selectedProductId: found?.id || null,
+      qty: formatNumber(row.qty || 0),
+      buyPrice: formatNumber(row.buyPrice || 0),
+      sellPrice: formatNumber(row.sellPrice || row.buyPrice || 0),
+      inlineProductEnabled: false,
+      inlineProductForm: { ...DEFAULT_PRODUCT_FORM },
+    };
+  }).filter((item) => item.qty && item.buyPrice && item.sellPrice);
+
+  return {
+    receiptCode: uppercaseInputValue(draft.receiptCode || ''),
+    receiptDate: draft.receiptDate || getTodayDateInput(),
+    supplierName: uppercaseInputValue(draft.supplierName || ''),
+    note: uppercaseInputValue(draft.note || ''),
+    idempotencyKey: crypto.randomUUID(),
+    rows: mappedRows.length > 0 ? mappedRows : [makeRow()],
+  };
+};
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -426,7 +472,10 @@ export default function StockAdd() {
   const [poHeaderErrors, setPoHeaderErrors] = useState<PoHeaderErrors>({});
   const [poRowErrors, setPoRowErrors] = useState<Record<string, PoRowFieldErrors>>({});
   const [hasAppliedProductPrefill, setHasAppliedProductPrefill] = useState(false);
+  const [hasAppliedAiDraftPrefill, setHasAppliedAiDraftPrefill] = useState(false);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [isImportingInvoice, setIsImportingInvoice] = useState(false);
+  const invoiceFileInputRef = useRef<HTMLInputElement | null>(null);
   const { currentUser } = useAuth();
   const hasUnsavedChanges = hasProductFormChanges(productForm) || hasMeaningfulPbData(poDraft);
 
@@ -474,12 +523,7 @@ export default function StockAdd() {
   useEffect(() => {
     const preselectProductId = searchParams.get('productId');
     if (!preselectProductId || !products.length || hasAppliedProductPrefill) return;
-    const hasEmptyDraft = poDraft.rows.length === 1
-      && !poDraft.rows[0].selectedProductId
-      && !poDraft.rows[0].productNameInput
-      && !poDraft.rows[0].qty
-      && !poDraft.rows[0].buyPrice
-      && !poDraft.rows[0].sellPrice;
+    const hasEmptyDraft = isEmptyPoDraft(poDraft);
 
     if (!hasEmptyDraft) {
       setHasAppliedProductPrefill(true);
@@ -507,7 +551,113 @@ export default function StockAdd() {
       next.delete('productId');
       return next;
     });
-  }, [searchParams, products, poDraft.rows, hasAppliedProductPrefill, setSearchParams]);
+  }, [searchParams, products, poDraft, hasAppliedProductPrefill, setSearchParams]);
+
+  useEffect(() => {
+    const aiDraftId = searchParams.get('aiDraftId');
+    if (!aiDraftId || !products.length || hasAppliedAiDraftPrefill) return;
+    const hasEmptyDraft = isEmptyPoDraft(poDraft);
+    if (!hasEmptyDraft) {
+      setPoFormError('Draft AI siap digunakan. Kosongkan form PB dulu untuk memuat draft.');
+      setHasAppliedAiDraftPrefill(true);
+      return;
+    }
+
+    let isActive = true;
+    const loadAiDraft = async () => {
+      try {
+        const draftRef = doc(db, 'ai_invoice_drafts', aiDraftId);
+        const snapshot = await getDoc(draftRef);
+        if (!snapshot.exists()) {
+          if (!isActive) return;
+          setPoFormError('Draft AI tidak ditemukan.');
+          setHasAppliedAiDraftPrefill(true);
+          return;
+        }
+        const data = snapshot.data() as Partial<InvoiceExtractDraft> & { rows?: InvoiceExtractDraft['rows'] };
+        const nextDraft = buildPoDraftFromAi({
+          supplierName: String(data.supplierName || ''),
+          receiptCode: String(data.receiptCode || ''),
+          receiptDate: String(data.receiptDate || ''),
+          note: String(data.note || ''),
+          rows: Array.isArray(data.rows) ? data.rows : [],
+          overallConfidence: Number(data.overallConfidence || 0),
+        }, products);
+        if (!isActive) return;
+        setTab('pb');
+        setPoFormError('');
+        setPoHeaderErrors({});
+        setPoRowErrors({});
+        setPoDraft(nextDraft);
+        setHasAppliedAiDraftPrefill(true);
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('aiDraftId');
+          next.set('tab', 'pb');
+          return next;
+        });
+      } catch (error) {
+        if (!isActive) return;
+        setPoFormError(error instanceof Error ? error.message : 'Gagal memuat draft AI.');
+        setHasAppliedAiDraftPrefill(true);
+      }
+    };
+    void loadAiDraft();
+    return () => {
+      isActive = false;
+    };
+  }, [searchParams, products, poDraft, hasAppliedAiDraftPrefill, setSearchParams]);
+
+  const handlePickInvoicePhoto = () => {
+    if (isImportingInvoice) return;
+    if (!currentUser) {
+      setPoFormError('Silakan login ulang untuk import invoice.');
+      return;
+    }
+    invoiceFileInputRef.current?.click();
+  };
+
+  const handleInvoicePhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!currentUser) {
+      setPoFormError('Silakan login ulang untuk import invoice.');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      setPoFormError('File harus berupa gambar invoice.');
+      return;
+    }
+
+    setPoFormError('');
+    setIsImportingInvoice(true);
+    try {
+      const idToken = await currentUser.getIdToken();
+      const safeName = toSafeFileName(file.name || 'invoice.jpg');
+      const imagePath = `invoice-uploads/${currentUser.uid}/${Date.now()}-${safeName}`;
+      const uploadRef = ref(storage, imagePath);
+      await uploadBytes(uploadRef, file, {
+        contentType: file.type || 'image/jpeg',
+      });
+      const response = await extractInvoiceDraft({
+        idToken,
+        imagePath,
+        supplierHint: poDraft.supplierName.trim() || undefined,
+      });
+      setHasAppliedAiDraftPrefill(false);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('tab', 'pb');
+        next.set('aiDraftId', response.draftId);
+        return next;
+      });
+    } catch (error) {
+      setPoFormError(error instanceof Error ? `Import invoice gagal: ${error.message}` : 'Import invoice gagal.');
+    } finally {
+      setIsImportingInvoice(false);
+    }
+  };
 
   const setPoRow = (rowId: string, patch: Partial<PoDraftRow>) => {
     setPoFormError('');
@@ -1097,8 +1247,27 @@ export default function StockAdd() {
 
       {tab === 'pb' && (
         <section className="mt-4 space-y-4 pb-24">
+          <input
+            ref={invoiceFileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={handleInvoicePhotoChange}
+          />
           <div className="ai-card space-y-4 p-5">
-            <h3 className="text-base font-semibold text-slate-900">Header Pembelian Barang</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-base font-semibold text-slate-900">Header Pembelian Barang</h3>
+              <button
+                type="button"
+                onClick={handlePickInvoicePhoto}
+                disabled={isImportingInvoice || isSavingPo}
+                className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-semibold text-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Camera className="h-4 w-4" />
+                {isImportingInvoice ? 'Memproses Invoice...' : 'Foto Invoice'}
+              </button>
+            </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Kode Struk *</label>
               <input
