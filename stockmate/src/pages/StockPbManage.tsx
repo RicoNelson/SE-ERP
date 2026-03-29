@@ -260,7 +260,9 @@ export default function StockPbManage() {
       return matchesFuzzySearch(pbAddProductQuery, [item.name, item.sku]);
     })
     .slice(0, 8);
-  const addProductHasNoMatch = pbAddProductQuery.trim().length > 0 && filteredAddProductSuggestions.length === 0;
+  const hasIdenticalNameMatch = pbAddProductQuery.trim().length > 0
+    && products.some((item) => toNameKey(item.name) === toNameKey(pbAddProductQuery));
+  const canShowAddNewOption = pbAddProductQuery.trim().length > 0 && !hasIdenticalNameMatch;
 
   const handleSelectAddProduct = (product: Product) => {
     setPbAddProductId(product.id || null);
@@ -1164,7 +1166,7 @@ export default function StockPbManage() {
                                         </p>
                                       </button>
                                     ))}
-                                    {addProductHasNoMatch && (
+                                    {canShowAddNewOption && (
                                       <button
                                         type="button"
                                         onMouseDown={(event) => event.preventDefault()}

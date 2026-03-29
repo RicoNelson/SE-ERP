@@ -242,7 +242,9 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
   }, [debouncedQuery, products]);
 
   const selectedProduct = products.find((item) => item.id === row.selectedProductId) || null;
-  const queryHasNoMatch = debouncedQuery.trim().length > 0 && suggestions.length === 0;
+  const hasIdenticalNameMatch = debouncedQuery.trim().length > 0
+    && products.some((item) => toNameKey(item.name) === toNameKey(debouncedQuery));
+  const canShowAddNewOption = debouncedQuery.trim().length > 0 && !hasIdenticalNameMatch;
   const isInlineMode = row.inlineProductEnabled;
 
   const handleSelectProduct = (product: Product) => {
@@ -320,7 +322,7 @@ function PoRowEditor({ row, products, rowIndex, errors, onChange, onRemove }: Po
                     </p>
                   </button>
                 ))}
-                {queryHasNoMatch && (
+                {canShowAddNewOption && (
                   <button
                     type="button"
                     onMouseDown={(event) => event.preventDefault()}
