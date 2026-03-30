@@ -339,7 +339,7 @@ const extractJsonWithGemini = async (ocrText: string, apiKey: string, supplierHi
   let text = '';
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-lite',
+      model: 'gemini-3.1-flash-lite-preview',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
