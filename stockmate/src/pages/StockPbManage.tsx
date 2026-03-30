@@ -41,6 +41,8 @@ interface PurchaseSummary {
 
 interface EditablePbItem extends PurchaseSummaryItem {
   draftQuantity: string;
+  draftUnitCost: string;
+  draftSellPrice: string;
   originalQuantity: number;
   isNew?: boolean;
   pendingNewProduct?: NormalizedProductInput;
@@ -333,6 +335,8 @@ export default function StockPbManage() {
           unitCost: Number(data.unitCost || 0),
           sellPrice: Number(data.sellPrice || 0),
           draftQuantity: quantity.toString(),
+          draftUnitCost: formatNumber(Number(data.unitCost || 0)),
+          draftSellPrice: formatNumber(Number(data.sellPrice || 0)),
           originalQuantity: quantity,
           isNew: false,
           layerQuantityRemaining: layer?.quantityRemaining || 0,
@@ -358,6 +362,8 @@ export default function StockPbManage() {
       const fallbackItems: EditablePbItem[] = purchase.items.map((item) => ({
         ...item,
         draftQuantity: item.quantity.toString(),
+        draftUnitCost: formatNumber(item.unitCost),
+        draftSellPrice: formatNumber(item.sellPrice),
         originalQuantity: item.quantity,
         isNew: false,
         layerQuantityRemaining: item.quantity,
@@ -415,6 +421,8 @@ export default function StockPbManage() {
           productNameSnapshot: formatProductName(product.name),
           quantity,
           draftQuantity: quantity.toString(),
+          draftUnitCost: formatNumber(unitCost),
+          draftSellPrice: formatNumber(sellPrice),
           originalQuantity: 0,
           unitCost,
           sellPrice,
@@ -460,6 +468,8 @@ export default function StockPbManage() {
         productNameSnapshot: normalizedProduct.name,
         quantity,
         draftQuantity: quantity.toString(),
+        draftUnitCost: formatNumber(normalizedProduct.costPrice),
+        draftSellPrice: formatNumber(normalizedProduct.sellPrice),
         originalQuantity: 0,
         unitCost: normalizedProduct.costPrice,
         sellPrice: normalizedProduct.sellPrice,
@@ -521,6 +531,16 @@ export default function StockPbManage() {
       setPbFieldError(`Jumlah item untuk produk "${invalidItem.productNameSnapshot}" wajib lebih dari 0.`);
       return;
     }
+    const invalidBuyPriceItem = combinedEditableItems.find((item) => !item.draftUnitCost.trim() || parseNumber(item.draftUnitCost) <= 0);
+    if (invalidBuyPriceItem) {
+      setPbFieldError(`Harga beli untuk produk "${invalidBuyPriceItem.productNameSnapshot}" wajib lebih dari 0.`);
+      return;
+    }
+    const invalidSellPriceItem = combinedEditableItems.find((item) => !item.draftSellPrice.trim() || parseNumber(item.draftSellPrice) <= 0);
+    if (invalidSellPriceItem) {
+      setPbFieldError(`Harga jual untuk produk "${invalidSellPriceItem.productNameSnapshot}" wajib lebih dari 0.`);
+      return;
+    }
     setPbFieldError(null);
     setIsPbSaving(true);
 
@@ -531,9 +551,13 @@ export default function StockPbManage() {
       const receiptDate = selectedPb.receiptDate || null;
       const preparedItems = combinedEditableItems.map((item) => {
         const nextQuantity = parseNumber(item.draftQuantity);
+        const nextUnitCost = parseNumber(item.draftUnitCost);
+        const nextSellPrice = parseNumber(item.draftSellPrice);
         return {
           ...item,
           nextQuantity,
+          unitCost: nextUnitCost,
+          sellPrice: nextSellPrice,
         };
       });
       const preparedRemovedItems = removedPbItems.filter((item) => !item.isNew);
@@ -741,6 +765,8 @@ export default function StockPbManage() {
             transaction.update(layerRef, {
               quantityReceived: item.nextQuantity,
               quantityRemaining: nextRemaining,
+              unitCost: item.unitCost,
+              sellPriceSnapshot: item.sellPrice,
               updatedAt: serverTimestamp(),
             });
 
@@ -768,6 +794,8 @@ export default function StockPbManage() {
               const purchaseItemRef = doc(db, 'purchase_items', purchaseItemId);
               transaction.update(purchaseItemRef, {
                 quantity: item.nextQuantity,
+                unitCost: item.unitCost,
+                sellPrice: item.sellPrice,
                 subtotal: item.nextQuantity * item.unitCost,
                 updatedAt: serverTimestamp(),
               });
@@ -775,6 +803,8 @@ export default function StockPbManage() {
 
             transaction.update(productRef, {
               stockQty: currentStockQty + quantityDiff,
+              costPrice: item.unitCost,
+              sellPrice: item.sellPrice,
               updatedAt: serverTimestamp(),
             });
             currentStockQty += quantityDiff;
@@ -1062,29 +1092,81 @@ export default function StockPbManage() {
                                     )}
                                     {item.isNew && <p className="mt-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-600">Item baru</p>}
                                   </div>
-                                  <div className="w-24">
-                                    <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Jumlah</label>
-                                    {userRole === 'owner' ? (
-                                      <input
-                                        type="text"
-                                        inputMode="numeric"
-                                        value={item.draftQuantity}
-                                        onChange={(event) => {
-                                          const { formatted } = handleFormattedInputChange(event.target.value);
-                                          setPbEditableItems((prev) => prev.map((row) => (
-                                            row.productId === item.productId
-                                              ? { ...row, draftQuantity: formatted }
-                                              : row
-                                          )));
-                                          setPbFieldError(null);
-                                        }}
-                                        className="ai-input w-full px-3 py-2 text-right text-sm font-semibold"
-                                      />
-                                    ) : (
-                                      <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm font-semibold text-slate-800">
-                                        {formatNumber(parseNumber(item.draftQuantity))}
-                                      </p>
-                                    )}
+                                  <div className="w-full max-w-sm">
+                                    <div className="grid grid-cols-3 gap-2">
+                                      <div>
+                                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Jumlah</label>
+                                        {userRole === 'owner' ? (
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={item.draftQuantity}
+                                            onChange={(event) => {
+                                              const { formatted } = handleFormattedInputChange(event.target.value);
+                                              setPbEditableItems((prev) => prev.map((row) => (
+                                                row.productId === item.productId
+                                                  ? { ...row, draftQuantity: formatted }
+                                                  : row
+                                              )));
+                                              setPbFieldError(null);
+                                            }}
+                                            className="ai-input w-full px-3 py-2 text-right text-sm font-semibold"
+                                          />
+                                        ) : (
+                                          <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm font-semibold text-slate-800">
+                                            {formatNumber(parseNumber(item.draftQuantity))}
+                                          </p>
+                                        )}
+                                      </div>
+                                      <div>
+                                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Beli</label>
+                                        {userRole === 'owner' ? (
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={item.draftUnitCost}
+                                            onChange={(event) => {
+                                              const { formatted } = handleFormattedInputChange(event.target.value);
+                                              setPbEditableItems((prev) => prev.map((row) => (
+                                                row.productId === item.productId
+                                                  ? { ...row, draftUnitCost: formatted }
+                                                  : row
+                                              )));
+                                              setPbFieldError(null);
+                                            }}
+                                            className="ai-input w-full px-3 py-2 text-right text-sm font-semibold"
+                                          />
+                                        ) : (
+                                          <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm font-semibold text-slate-800">
+                                            {formatNumber(parseNumber(item.draftUnitCost))}
+                                          </p>
+                                        )}
+                                      </div>
+                                      <div>
+                                        <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Jual</label>
+                                        {userRole === 'owner' ? (
+                                          <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={item.draftSellPrice}
+                                            onChange={(event) => {
+                                              const { formatted } = handleFormattedInputChange(event.target.value);
+                                              setPbEditableItems((prev) => prev.map((row) => (
+                                                row.productId === item.productId
+                                                  ? { ...row, draftSellPrice: formatted }
+                                                  : row
+                                              )));
+                                              setPbFieldError(null);
+                                            }}
+                                            className="ai-input w-full px-3 py-2 text-right text-sm font-semibold"
+                                          />
+                                        ) : (
+                                          <p className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-right text-sm font-semibold text-slate-800">
+                                            {formatNumber(parseNumber(item.draftSellPrice))}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
