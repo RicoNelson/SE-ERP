@@ -41,6 +41,11 @@ export const DEFAULT_PRODUCT_FORM: ProductFormData = {
 export const toNameKey = (name: string): string =>
   normalizeSearchQuery(name);
 
+export const toNameKeyDocId = (nameKey: string): string =>
+  nameKey
+    .replace(/%/g, '%25')
+    .replace(/\//g, '%2F');
+
 export const normalizeProductForm = (form: ProductFormData): NormalizedProductInput => ({
   name: formatProductName(form.name),
   nameKey: toNameKey(form.name),

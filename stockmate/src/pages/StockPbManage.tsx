@@ -11,6 +11,7 @@ import {
   getProductFormFieldErrors,
   normalizeProductForm,
   toNameKey,
+  toNameKeyDocId,
   toProductDocument,
   type NormalizedProductInput,
   type ProductFormData,
@@ -627,7 +628,7 @@ export default function StockPbManage() {
 
           if (item.pendingNewProduct) {
             pendingNewProduct = item.pendingNewProduct;
-            nameKeyRef = doc(db, 'product_name_keys', pendingNewProduct.nameKey);
+            nameKeyRef = doc(db, 'product_name_keys', toNameKeyDocId(pendingNewProduct.nameKey));
             const nameKeySnap = await transaction.get(nameKeyRef);
             if (nameKeySnap.exists()) {
               throw new Error(`Produk "${pendingNewProduct.name}" sudah terdaftar. Gunakan produk existing.`);

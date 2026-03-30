@@ -24,6 +24,7 @@ import {
   getProductFormFieldErrors,
   normalizeProductForm,
   toNameKey,
+  toNameKeyDocId,
   toProductDocument,
   type ProductFormFieldErrors,
   type ProductFormData,
@@ -778,7 +779,7 @@ export default function StockAdd() {
     setIsSavingProduct(true);
     try {
       await runTransaction(db, async (transaction) => {
-        const nameKeyRef = doc(db, 'product_name_keys', normalized.nameKey);
+        const nameKeyRef = doc(db, 'product_name_keys', toNameKeyDocId(normalized.nameKey));
         const existingNameKey = await transaction.get(nameKeyRef);
         if (existingNameKey.exists()) {
           throw new Error('DUPLICATE_PRODUCT_NAME');
@@ -984,7 +985,7 @@ export default function StockAdd() {
 
           if (row.inlineProductEnabled) {
             const normalized = normalizeProductForm(row.inlineProductForm);
-            nameKeyRef = doc(db, 'product_name_keys', normalized.nameKey);
+            nameKeyRef = doc(db, 'product_name_keys', toNameKeyDocId(normalized.nameKey));
             const existingName = await transaction.get(nameKeyRef);
 
             if (existingName.exists()) {
