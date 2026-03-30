@@ -16,6 +16,15 @@ const AuthContext = createContext<AuthContextType>({
   loading: true,
 });
 
+const LOGIN_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+
+const getLastSignInTimestamp = (user: User): number | null => {
+  const lastSignInRaw = user.metadata.lastSignInTime || user.metadata.creationTime;
+  if (!lastSignInRaw) return null;
+  const timestamp = Date.parse(lastSignInRaw);
+  return Number.isNaN(timestamp) ? null : timestamp;
+};
+
 // eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext);
 
@@ -27,6 +36,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user && user.phoneNumber) {
+        const lastSignInTimestamp = getLastSignInTimestamp(user);
+        if (lastSignInTimestamp && Date.now() - lastSignInTimestamp > LOGIN_MAX_AGE_MS) {
+          alert('Sesi login sudah melewati 3 bulan. Silakan login ulang.');
+          await signOut(auth);
+          setCurrentUser(null);
+          setUserProfile(null);
+          setLoading(false);
+          return;
+        }
+
         // 1. We will use the phoneNumber as the document ID to make it easy for owners to pre-register staff
         const userRef = doc(db, 'users', user.phoneNumber);
         const userSnap = await getDoc(userRef);
