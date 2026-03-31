@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import { useOwnerSaleNotifications } from '../hooks/useOwnerSaleNotifications';
 
 export default function Layout() {
+  const storeName = import.meta.env.VITE_STORE_NAME || 'SE ERP';
   const { currentUser, userProfile, loading } = useAuth();
   const navigate = useNavigate();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
@@ -78,7 +79,7 @@ export default function Layout() {
             </div>
             <div>
               <p className="ai-kicker mb-1">Manajemen Toko</p>
-              <h1 className="ai-heading text-lg font-bold text-slate-900">Sukses Elektronik</h1>
+              <h1 className="ai-heading text-lg font-bold text-slate-900">{storeName}</h1>
             </div>
           </div>
           <div className="flex items-center gap-2">

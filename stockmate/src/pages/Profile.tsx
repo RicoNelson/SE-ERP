@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { User, LogOut, ShieldCheck, Phone } from 'lucide-react';
 
 export default function Profile() {
+  const storeName = import.meta.env.VITE_STORE_NAME || 'SE ERP';
   const { currentUser, userProfile } = useAuth();
   const navigate = useNavigate();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -37,7 +38,7 @@ export default function Profile() {
             <User className="h-10 w-10 text-sky-700" />
           </div>
           <h3 className="text-lg font-bold text-slate-900">
-            {userProfile?.name || currentUser?.displayName || 'Pengguna Sukses Elektronik'}
+            {userProfile?.name || currentUser?.displayName || `Pengguna ${storeName}`}
           </h3>
           <p className="mt-1 flex items-center gap-1 text-sm text-slate-500">
             <Phone className="h-4 w-4" />
@@ -66,7 +67,7 @@ export default function Profile() {
       </div>
       
       <p className="mt-8 text-center text-xs text-slate-500">
-        Sukses Elektronik v1.0.0
+        {storeName} v1.0.0
       </p>
     </div>
   );

@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function Login() {
+  const storeName = import.meta.env.VITE_STORE_NAME || 'SE ERP';
   const { currentUser } = useAuth();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [otp, setOtp] = useState('');
@@ -217,7 +218,7 @@ export default function Login() {
             Masuk Sistem
           </div>
           <div>
-            <h1 className="ai-heading text-3xl font-bold text-slate-900">Sukses Elektronik</h1>
+            <h1 className="ai-heading text-3xl font-bold text-slate-900">{storeName}</h1>
             <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-600">
               Masuk ke dashboard inventaris dengan pengalaman yang aman, cepat, dan nyaman digunakan.
             </p>
