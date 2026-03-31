@@ -17,7 +17,6 @@ npm install -g firebase-tools
 
 - App directory: `SE Inventory/stockmate`
 - Hosting config: `stockmate/firebase.json`
-- Default Firebase project alias: `se-erp-4c7fe` (from `stockmate/.firebaserc`)
 
 ## 3) Environment Setup
 
@@ -55,7 +54,7 @@ From `stockmate`:
 
 ```bash
 firebase login
-firebase use se-erp-4c7fe
+firebase use <your_firebase_project_id>
 firebase deploy --only hosting
 ```
 
