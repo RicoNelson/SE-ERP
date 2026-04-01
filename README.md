@@ -44,6 +44,7 @@ Fill the values in `.env`:
 - VITE_FIREBASE_APP_ID
 - VITE_RECAPTCHA_SITE_KEY
 - VITE_INVOICE_EXTRACT_URL (optional, see backend section)
+- VITE_STORE_NAME (nama toko yang tampil di aplikasi)
 
 2) Install and run
 
@@ -112,6 +113,7 @@ Enable these services in your Firebase project:
    - `VITE_FIREBASE_STORAGE_BUCKET`
    - `VITE_FIREBASE_MESSAGING_SENDER_ID`
    - `VITE_FIREBASE_APP_ID`
+   - `VITE_STORE_NAME` (contoh: `SE Works`)
 4. In Authentication, enable **Phone** sign-in.
 5. In Firestore, create the database in production mode (or test mode for local trials).
 6. In Storage, create the default bucket.
@@ -198,6 +200,7 @@ npm run dev
 - Frontend can read/write Firestore documents.
 - Storage upload works for invoice images.
 - Calling invoice extraction returns a draft instead of permission/API errors.
+- Nama toko tampil sesuai `VITE_STORE_NAME` di halaman login, header, dan profil.
 
 ### Common setup errors
 
