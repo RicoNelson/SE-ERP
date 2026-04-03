@@ -1,11 +1,24 @@
 import { useState } from 'react';
-import { Search, Trash2, Edit3, ChevronDown, ShoppingBag, CreditCard } from 'lucide-react';
-import { doc, serverTimestamp, collection, runTransaction, query, where, getDocs, Timestamp, type DocumentReference } from 'firebase/firestore';
+import { Search, Trash2, Edit3, ChevronDown, ShoppingBag, CreditCard, History } from 'lucide-react';
+import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
-import type { Product, InventoryLayer, FifoAllocation } from '../types';
+import type { Product, InventoryLayer } from '../types';
 import { formatNumber, formatProductName, handleFormattedInputChange, parseNumber } from '../utils/format';
 import ProductSearchModal from '../components/ProductSearchModal';
+import {
+  createSale,
+  deleteSale,
+  replaceSale,
+  type SaleHistoryItem,
+} from '../features/sales/saleTransactions';
+import {
+  PAYMENT_METHODS,
+  createSoldAtFromInput,
+  toDateInputValue,
+} from '../features/sales/constants';
+import SalesHistoryModal from '../components/sales/SalesHistoryModal';
+import SaleEditModal from '../components/sales/SaleEditModal';
 
 interface CartItem extends Product {
   cartQuantity: string; // Keep as string for the text input handling
@@ -17,28 +30,6 @@ interface SaleRowErrors {
   cartPrice?: string;
 }
 
-const PAYMENT_METHODS = [
-  'QRIS',
-  'ShopeePay Later',
-  'Kredivo',
-  'Transfer Bank - BCA',
-  'Transfer Bank - BRI',
-  'Transfer Bank - Mandiri',
-  'Tunai'
-];
-
-const toDateInputValue = (date: Date) => {
-  const yyyy = date.getFullYear();
-  const mm = `${date.getMonth() + 1}`.padStart(2, '0');
-  const dd = `${date.getDate()}`.padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-};
-
-const parseSaleDateInput = (value: string) => {
-  const parsed = new Date(`${value}T00:00:00`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-};
-
 export default function Sell() {
   const today = toDateInputValue(new Date());
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -48,6 +39,10 @@ export default function Sell() {
   const [soldDate, setSoldDate] = useState(today);
   const [saleFormError, setSaleFormError] = useState('');
   const [saleRowErrors, setSaleRowErrors] = useState<Record<string, SaleRowErrors>>({});
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [selectedSale, setSelectedSale] = useState<SaleHistoryItem | null>(null);
+  const [isEditingSale, setIsEditingSale] = useState(false);
+  const [isDeletingSale, setIsDeletingSale] = useState(false);
   const { currentUser } = useAuth();
 
   // Calculate total
@@ -148,14 +143,11 @@ export default function Sell() {
     if (cart.length === 0 || isProcessing) return;
     setSaleFormError('');
     setSaleRowErrors({});
-    const parsedSoldDate = parseSaleDateInput(soldDate);
-    if (!parsedSoldDate) {
+    const soldAt = createSoldAtFromInput(soldDate);
+    if (!soldAt) {
       setSaleFormError('Tanggal terjual wajib diisi.');
       return;
     }
-    const now = new Date();
-    parsedSoldDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
-    const soldAtTimestamp = Timestamp.fromDate(parsedSoldDate);
 
     const cartWithParsedQty = cart.map((item) => ({
       ...item,
@@ -183,194 +175,15 @@ export default function Sell() {
     setIsProcessing(true);
 
     try {
-      const layerRefsByProduct = new Map<string, DocumentReference[]>();
-      for (const item of cartWithParsedQty) {
-        const productId = item.id!;
-        const layersQuery = query(
-          collection(db, 'inventory_layers'),
-          where('productId', '==', productId),
-        );
-        const layersSnapshot = await getDocs(layersQuery);
-        const sortedLayerRefs = [...layersSnapshot.docs]
-          .sort((a, b) => {
-            const aDate = (a.data().receivedAt?.toDate?.() as Date | undefined)?.getTime() || 0;
-            const bDate = (b.data().receivedAt?.toDate?.() as Date | undefined)?.getTime() || 0;
-            return aDate - bDate;
-          })
-          .map((docItem) => docItem.ref);
-        layerRefsByProduct.set(productId, sortedLayerRefs);
-      }
-
-      await runTransaction(db, async (transaction) => {
-        const saleRef = doc(collection(db, 'sales'));
-        const preparedSales: Array<{
-          productId: string;
-          productRef: DocumentReference;
-          currentStock: number;
-          quantityToSell: number;
-          movementRef: DocumentReference;
-          totalRevenue: number;
-          avgCost: number;
-          totalCost: number;
-          fifoAllocations: FifoAllocation[];
-          layerUpdates: Array<{
-            ref: DocumentReference;
-            quantityRemaining: number;
-          }>;
-          saleItem: {
-            productId: string;
-            productNameSnapshot: string;
-            quantity: number;
-            unitPrice: number;
-            originalPrice: number;
-            costPrice: number;
-            totalCost: number;
-            fifoAllocations: FifoAllocation[];
-          };
-        }> = [];
-
-        for (const item of cartWithParsedQty) {
-          const productId = item.id!;
-          const quantityToSell = item.parsedQuantity;
-          const productRef = doc(db, 'products', productId);
-          const productSnap = await transaction.get(productRef);
-
-          if (!productSnap.exists()) {
-            throw new Error(`Produk ${formatProductName(item.name)} tidak ditemukan.`);
-          }
-
-          const productData = productSnap.data() as Product;
-          const currentStock = productData.stockQty || 0;
-          const candidateLayerRefs = layerRefsByProduct.get(productId) || [];
-
-          let remainingToAllocate = quantityToSell;
-          let totalCost = 0;
-          const allocations: FifoAllocation[] = [];
-          const layerUpdates: Array<{
-            ref: DocumentReference;
-            quantityRemaining: number;
-          }> = [];
-
-          for (const layerRef of candidateLayerRefs) {
-            if (remainingToAllocate <= 0) break;
-            const layerSnap = await transaction.get(layerRef);
-            if (!layerSnap.exists()) continue;
-            const layerData = layerSnap.data() as InventoryLayer;
-            const available = layerData.quantityRemaining || 0;
-
-            if (available <= 0) continue;
-
-            const allocatedQty = Math.min(available, remainingToAllocate);
-            const newRemaining = available - allocatedQty;
-            const unitCost = layerData.unitCost || 0;
-
-            layerUpdates.push({
-              ref: layerRef,
-              quantityRemaining: newRemaining,
-            });
-
-            allocations.push({
-              layerId: layerSnap.id,
-              quantity: allocatedQty,
-              unitCost,
-              unitSellPrice: item.parsedUnitPrice,
-            });
-
-            totalCost += allocatedQty * unitCost;
-            remainingToAllocate -= allocatedQty;
-          }
-
-          if (remainingToAllocate > 0) {
-            const fallbackUnitCost = productData.costPrice || 0;
-            allocations.push({
-              layerId: 'negative_stock',
-              quantity: remainingToAllocate,
-              unitCost: fallbackUnitCost,
-              unitSellPrice: item.parsedUnitPrice,
-            });
-            totalCost += remainingToAllocate * fallbackUnitCost;
-          }
-
-          const totalRevenue = quantityToSell * item.parsedUnitPrice;
-          const avgCost = quantityToSell > 0 ? totalCost / quantityToSell : 0;
-          const movementRef = doc(collection(db, 'stock_movements'));
-
-          preparedSales.push({
-            productId,
-            productRef,
-            currentStock,
-            quantityToSell,
-            movementRef,
-            totalRevenue,
-            avgCost,
-            totalCost,
-            fifoAllocations: allocations,
-            layerUpdates,
-            saleItem: {
-              productId,
-              productNameSnapshot: formatProductName(item.name),
-              quantity: quantityToSell,
-              unitPrice: item.parsedUnitPrice,
-              originalPrice: item.parsedUnitPrice,
-              costPrice: avgCost,
-              totalCost,
-              fifoAllocations: allocations,
-            },
-          });
-        }
-
-        let computedSaleTotal = 0;
-        const saleItems: Array<{
-          productId: string;
-          productNameSnapshot: string;
-          quantity: number;
-          unitPrice: number;
-          originalPrice: number;
-          costPrice: number;
-          totalCost: number;
-          fifoAllocations: FifoAllocation[];
-        }> = [];
-
-        for (const prepared of preparedSales) {
-          for (const layerUpdate of prepared.layerUpdates) {
-            transaction.update(layerUpdate.ref, {
-              quantityRemaining: layerUpdate.quantityRemaining,
-              updatedAt: serverTimestamp(),
-            });
-          }
-
-          transaction.update(prepared.productRef, {
-            stockQty: prepared.currentStock - prepared.quantityToSell,
-            updatedAt: serverTimestamp(),
-          });
-
-          transaction.set(prepared.movementRef, {
-            productId: prepared.productId,
-            type: 'sale',
-            quantityChange: -prepared.quantityToSell,
-            referenceId: saleRef.id,
-            referenceType: 'sale',
-            performedBy: currentUser?.uid || 'unknown',
-            performedAt: soldAtTimestamp,
-            fifoAllocations: prepared.fifoAllocations,
-            totalCost: prepared.totalCost,
-            totalRevenue: prepared.totalRevenue,
-            unitCost: prepared.avgCost,
-          });
-
-          computedSaleTotal += prepared.totalRevenue;
-          saleItems.push(prepared.saleItem);
-        }
-
-        transaction.set(saleRef, {
-          items: saleItems,
-          total: computedSaleTotal,
-          paymentMethod: paymentMethod,
-          soldBy: currentUser?.uid || 'unknown',
-          soldAt: soldAtTimestamp,
-          createdAt: serverTimestamp(),
-        });
-      });
+      await createSale(db, {
+        soldAt,
+        paymentMethod,
+        items: cartWithParsedQty.map((item) => ({
+          productId: item.id!,
+          quantity: item.parsedQuantity,
+          unitPrice: item.parsedUnitPrice,
+        })),
+      }, currentUser?.uid || 'unknown');
 
       setCart([]);
       setSaleFormError('');
@@ -383,6 +196,38 @@ export default function Sell() {
       alert(message);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleSaveEditedSale = async (draft: { soldAt: Date; paymentMethod: string; items: Array<{ productId: string; quantity: number; unitPrice: number }> }) => {
+    if (!selectedSale || isEditingSale) return;
+    setIsEditingSale(true);
+    try {
+      await replaceSale(db, selectedSale.id, draft, currentUser?.uid || 'unknown');
+      setSelectedSale(null);
+      setIsHistoryOpen(false);
+      alert('Penjualan berhasil diperbarui. Stok, laporan, dan FIFO sudah disesuaikan.');
+    } catch (error) {
+      console.error('Error updating sale:', error);
+      alert(error instanceof Error ? error.message : 'Gagal memperbarui penjualan.');
+    } finally {
+      setIsEditingSale(false);
+    }
+  };
+
+  const handleDeleteSelectedSale = async () => {
+    if (!selectedSale || isDeletingSale) return;
+    setIsDeletingSale(true);
+    try {
+      await deleteSale(db, selectedSale.id);
+      setSelectedSale(null);
+      setIsHistoryOpen(false);
+      alert('Penjualan berhasil dihapus. Stok, laporan, dan FIFO sudah dikembalikan.');
+    } catch (error) {
+      console.error('Error deleting sale:', error);
+      alert(error instanceof Error ? error.message : 'Gagal menghapus penjualan.');
+    } finally {
+      setIsDeletingSale(false);
     }
   };
 
@@ -587,12 +432,44 @@ export default function Sell() {
             </div>
           </div>
         </div>
+
+        <div className="fixed bottom-[196px] right-4 z-10">
+          <button
+            type="button"
+            onClick={() => setIsHistoryOpen(true)}
+            className="ai-button-ghost flex items-center justify-center rounded-full border border-sky-200 bg-white p-3.5 text-sky-700 shadow-[0_16px_34px_rgba(14,165,233,0.16)]"
+            title="Lihat daftar penjualan"
+            aria-label="Lihat daftar penjualan"
+          >
+            <History className="h-6 w-6" />
+          </button>
+        </div>
       </div>
 
       <ProductSearchModal 
         isOpen={isSearchOpen} 
         onClose={() => setIsSearchOpen(false)}
         onAddProduct={handleAddProduct}
+      />
+
+      <SalesHistoryModal
+        isOpen={isHistoryOpen}
+        onClose={() => {
+          setIsHistoryOpen(false);
+          setSelectedSale(null);
+        }}
+        onSelectSale={(sale) => setSelectedSale(sale)}
+      />
+
+      <SaleEditModal
+        key={selectedSale?.id || 'sale-editor'}
+        sale={selectedSale}
+        isOpen={Boolean(selectedSale)}
+        isSaving={isEditingSale}
+        isDeleting={isDeletingSale}
+        onClose={() => setSelectedSale(null)}
+        onSave={handleSaveEditedSale}
+        onDelete={handleDeleteSelectedSale}
       />
     </>
   );
