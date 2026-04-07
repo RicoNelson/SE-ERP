@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult } from 'firebase/auth';
 import { auth } from '../lib/firebase';
-import { Package, ShieldCheck, Sparkles, ChevronRight } from 'lucide-react';
+import { Package, ShieldCheck, Sparkles, ChevronRight, Download } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -16,6 +16,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
   const [sendCodeCooldownSec, setSendCodeCooldownSec] = useState(0);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   
   const navigate = useNavigate();
 
@@ -48,6 +49,24 @@ export default function Login() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [sendCodeCooldownSec]);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+
+    const handleAppInstalled = () => {
+      setInstallPrompt(null);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
 
   const formatPhoneNumber = (phone: string) => {
     // Basic formatting: ensure it starts with +62 if not provided
@@ -203,6 +222,28 @@ export default function Login() {
     }
   };
 
+  const handleInstallClick = async () => {
+    const userAgent = window.navigator.userAgent || '';
+    const isIphone = /iPhone/i.test(userAgent);
+    const isSafari = /Safari/i.test(userAgent) && !/CriOS|FxiOS|EdgiOS/i.test(userAgent);
+
+    if (isIphone) {
+      const steps = isSafari
+        ? 'Cara install di iPhone:\n1. Tap tombol Share (kotak dengan panah ke atas)\n2. Pilih "Add to Home Screen"\n3. Tap "Add".'
+        : 'Untuk install di iPhone, buka halaman ini di Safari lalu:\n1. Tap Share\n2. Pilih "Add to Home Screen"\n3. Tap "Add".';
+      window.alert(steps);
+      return;
+    }
+
+    if (!installPrompt) return;
+
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+
+    if (choice.outcome === 'dismissed') return;
+    setInstallPrompt(null);
+  };
+
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(121,231,255,0.18),transparent_26%),radial-gradient(circle_at_80%_20%,rgba(82,168,255,0.18),transparent_24%)]" />
@@ -326,6 +367,15 @@ export default function Login() {
             </button>
           </form>
         )}
+
+        <button
+          type="button"
+          onClick={handleInstallClick}
+          className="ai-button-secondary mt-4 inline-flex w-full items-center justify-center gap-2 px-4 py-3 font-semibold"
+        >
+          <Download className="h-4 w-4 text-sky-600" />
+          Install App
+        </button>
 
         <div className="ai-divider my-6" />
 

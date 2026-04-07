@@ -9,6 +9,7 @@ import StockPbManage from './pages/StockPbManage';
 import Reports from './pages/Reports';
 import Profile from './pages/Profile';
 import Users from './pages/Users';
+import Notifications from './pages/Notifications';
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
             <Route path="/stock/add" element={<StockAdd />} />
             <Route path="/stock/pb" element={<StockPbManage />} />
             <Route path="/reports" element={<Reports />} />
+            <Route path="/notifications" element={<Notifications />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/users" element={<Users />} />
           </Route>

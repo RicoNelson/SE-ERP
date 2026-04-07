@@ -12,13 +12,23 @@ import { useAuth } from '../contexts/AuthContext';
 import { useEffect, useState } from 'react';
 import { useOwnerSaleNotifications } from '../hooks/useOwnerSaleNotifications';
 
+export interface OwnerNotificationOutletContext {
+  notifications: ReturnType<typeof useOwnerSaleNotifications>['notifications'];
+  unreadCount: number;
+  markAllAsRead: () => void;
+}
+
 export default function Layout() {
   const storeName = import.meta.env.VITE_STORE_NAME || 'SE ERP';
   const { currentUser, userProfile, loading } = useAuth();
   const navigate = useNavigate();
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
 
-  useOwnerSaleNotifications(currentUser?.uid, userProfile);
+  const {
+    notifications,
+    unreadCount,
+    markAllAsRead,
+  } = useOwnerSaleNotifications(currentUser?.uid, userProfile);
 
   useEffect(() => {
     if (!loading && !currentUser) {
@@ -93,18 +103,25 @@ export default function Layout() {
                 Pasang
               </button>
             )}
-            <div className="glass-panel flex h-11 w-11 items-center justify-center rounded-2xl text-slate-700">
-              <div className="relative">
-                <BellRing className="h-4 w-4" />
-                <span className="ai-badge-live absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-rose-400 shadow-[0_0_18px_rgba(255,107,157,0.7)]" />
-              </div>
-            </div>
+            <button
+              type="button"
+              aria-label="Buka notifikasi"
+              onClick={() => navigate('/notifications')}
+              className="glass-panel relative flex h-11 w-11 items-center justify-center rounded-2xl text-slate-700 transition hover:bg-white/80"
+            >
+              <BellRing className="h-4 w-4" />
+              {userProfile?.role === 'owner' && unreadCount > 0 && (
+                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
       </header>
 
       <main className="flex-1 overflow-y-auto pb-24">
-        <Outlet />
+        <Outlet context={{ notifications, unreadCount, markAllAsRead } satisfies OwnerNotificationOutletContext} />
       </main>
 
       <nav className="fixed bottom-0 z-20 w-full px-4 pb-safe">

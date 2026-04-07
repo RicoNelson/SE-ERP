@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "se-erp-4c7fe"
-  }
+  },
+  "targets": {
+    "se-erp-4c7fe": {
+      "hosting": {
+        "app": [
+          "se-erp-4c7fe"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }
