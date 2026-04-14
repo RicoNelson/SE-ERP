@@ -1,5 +1,4 @@
 import vision from '@google-cloud/vision';
-import { GoogleGenAI } from '@google/genai';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore, type QueryDocumentSnapshot } from 'firebase-admin/firestore';
@@ -12,7 +11,9 @@ import { onRequest } from 'firebase-functions/v2/https';
 initializeApp();
 setGlobalOptions({ region: 'asia-southeast1', maxInstances: 10 });
 
-const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+const SUMOPOD_API_URL = 'https://ai.sumopod.com/v1/chat/completions';
+const SUMOPOD_MODEL = 'glm-5';
+const SUMOPOD_API_KEY = defineSecret('SUMOPOD_API_KEY');
 const visionClient = new vision.ImageAnnotatorClient();
 const db = getFirestore();
 const auth = getAuth();
@@ -65,7 +66,7 @@ interface MappedInvoiceRow {
   candidates: Candidate[];
 }
 
-interface GeminiRequestError extends Error {
+interface LlmRequestError extends Error {
   statusCode?: number;
   retryAfterSeconds?: number;
   responseBody?: string;
@@ -134,34 +135,62 @@ const safeJsonParse = <T>(text: string): T => {
   return JSON.parse(cleaned) as T;
 };
 
+const extractJsonObject = (text: string): string => {
+  const cleaned = text
+    .replace(/^```json/i, '')
+    .replace(/^```/i, '')
+    .replace(/```$/i, '')
+    .trim();
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return cleaned.slice(firstBrace, lastBrace + 1);
+  }
+  return cleaned;
+};
+
 const parseRetryAfterSeconds = (responseText: string): number | undefined => {
   const jsonMatch = responseText.match(/"retryDelay"\s*:\s*"(\d+)s"/i);
   if (jsonMatch) return Number(jsonMatch[1]);
+  const retryAfterJson = responseText.match(/"retry[_-]?after"\s*:\s*(\d+)/i);
+  if (retryAfterJson) return Number(retryAfterJson[1]);
   const plainMatch = responseText.match(/retry in\s+(\d+(\.\d+)?)s/i);
   if (!plainMatch) return undefined;
   return Math.ceil(Number(plainMatch[1]));
 };
 
-const buildGeminiRequestError = (statusCode: number, responseText: string): GeminiRequestError => {
-  const fallbackMessage = `Gemini request failed: ${statusCode}`;
+const buildLlmRequestError = (
+  statusCode: number,
+  responseText: string,
+  retryAfterHeader?: string | null,
+): LlmRequestError => {
+  const fallbackMessage = `LLM request failed: ${statusCode}`;
   const messageFromJson = (() => {
     try {
-      const parsed = JSON.parse(responseText) as { error?: { message?: string } };
-      return parsed.error?.message?.trim() || '';
+      const parsed = JSON.parse(responseText) as { error?: { message?: string } | string; message?: string };
+      if (typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error.trim();
+      if (typeof parsed.message === 'string' && parsed.message.trim()) return parsed.message.trim();
+      if (parsed.error && typeof parsed.error === 'object' && typeof parsed.error.message === 'string') {
+        return parsed.error.message.trim();
+      }
+      return '';
     } catch {
       return '';
     }
   })();
-  const error = new Error(messageFromJson ? `Gemini request failed: ${messageFromJson}` : fallbackMessage) as GeminiRequestError;
+  const error = new Error(messageFromJson ? `LLM request failed: ${messageFromJson}` : fallbackMessage) as LlmRequestError;
   error.statusCode = statusCode;
-  error.retryAfterSeconds = parseRetryAfterSeconds(responseText);
+  const retryAfterFromHeader = retryAfterHeader ? Number(retryAfterHeader) : undefined;
+  error.retryAfterSeconds = Number.isFinite(retryAfterFromHeader)
+    ? Math.ceil(retryAfterFromHeader as number)
+    : parseRetryAfterSeconds(responseText);
   error.responseBody = responseText;
   return error;
 };
 
-const buildGeminiSdkError = (error: unknown): GeminiRequestError => {
-  const original = error instanceof Error ? error : new Error('Gemini request failed: unknown error');
-  const sdkError = original as GeminiRequestError & {
+const buildLlmSdkError = (error: unknown): LlmRequestError => {
+  const original = error instanceof Error ? error : new Error('LLM request failed: unknown error');
+  const sdkError = original as LlmRequestError & {
     status?: number;
     code?: number | string;
     cause?: unknown;
@@ -174,7 +203,7 @@ const buildGeminiSdkError = (error: unknown): GeminiRequestError => {
         ? sdkError.code
         : undefined;
   const body = sdkError.message || '';
-  const normalized = new Error(`Gemini request failed: ${body || 'unknown error'}`) as GeminiRequestError;
+  const normalized = new Error(`LLM request failed: ${body || 'unknown error'}`) as LlmRequestError;
   normalized.statusCode = statusCode;
   normalized.retryAfterSeconds = parseRetryAfterSeconds(body);
   normalized.responseBody = body;
@@ -314,7 +343,7 @@ const findMatches = (rawName: string, products: ProductRecord[]): { mappedProduc
   };
 };
 
-const extractJsonWithGemini = async (ocrText: string, apiKey: string, supplierHint = ''): Promise<ParsedInvoiceResult> => {
+const extractJsonWithLlm = async (ocrText: string, apiKey: string, supplierHint = ''): Promise<ParsedInvoiceResult> => {
   const prompt = [
     'You are extracting supplier invoice data for inventory stock-in.',
     'Return strict JSON only with this exact shape:',
@@ -335,24 +364,90 @@ const extractJsonWithGemini = async (ocrText: string, apiKey: string, supplierHi
     ocrText.slice(0, 24000),
   ].join('\n');
 
-  const ai = new GoogleGenAI({ apiKey });
+  const llmRequestBody = {
+    model: SUMOPOD_MODEL,
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 1800,
+    temperature: 0.1,
+  };
+
   let text = '';
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite-preview',
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        temperature: 0.1,
-      },
+    logger.info('sumopod llm request', {
+      url: SUMOPOD_API_URL,
+      model: llmRequestBody.model,
+      maxTokens: llmRequestBody.max_tokens,
+      temperature: llmRequestBody.temperature,
+      supplierHint: supplierHint || null,
+      promptLength: prompt.length,
+      promptPreview: prompt.slice(0, 1200),
+      hasApiKey: Boolean(apiKey),
     });
-    text = String(response.text || '').trim();
+
+    const response = await fetch(SUMOPOD_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(llmRequestBody),
+    });
+
+    if (!response.ok) {
+      const responseText = await response.text();
+      logger.error('sumopod llm error response', {
+        status: response.status,
+        statusText: response.statusText,
+        retryAfter: response.headers.get('retry-after'),
+        bodyPreview: responseText.slice(0, 4000),
+      });
+      throw buildLlmRequestError(response.status, responseText, response.headers.get('retry-after'));
+    }
+
+    const payload = await response.json() as {
+      choices?: Array<{
+        finish_reason?: string;
+        message?: {
+          content?: string | Array<{ type?: string; text?: string }>;
+          reasoning_content?: string;
+          provider_specific_fields?: {
+            reasoning_content?: string;
+          };
+        };
+      }>;
+    };
+    const firstChoice = payload.choices?.[0];
+    const content = firstChoice?.message?.content;
+    const contentText = Array.isArray(content)
+      ? content.map((part) => part.text || '').join('').trim()
+      : String(content || '').trim();
+    const reasoningText = String(
+      firstChoice?.message?.reasoning_content
+      || firstChoice?.message?.provider_specific_fields?.reasoning_content
+      || '',
+    ).trim();
+    text = contentText || reasoningText;
+
+    logger.info('sumopod llm success response', {
+      status: response.status,
+      choiceCount: payload.choices?.length || 0,
+      finishReason: firstChoice?.finish_reason || null,
+      firstChoiceType: Array.isArray(firstChoice?.message?.content) ? 'array' : typeof firstChoice?.message?.content,
+      contentLength: contentText.length,
+      reasoningLength: reasoningText.length,
+    });
+    logger.info('sumopod llm parsed content', {
+      textLength: text.length,
+      textPreview: text.slice(0, 2000),
+    });
   } catch (error) {
-    throw buildGeminiSdkError(error);
+    logger.error('sumopod llm request failed', error);
+    if ((error as LlmRequestError)?.statusCode) throw error;
+    throw buildLlmSdkError(error);
   }
 
-  if (!text) throw new Error('Gemini returned empty response');
-  const parsed = safeJsonParse<ParsedInvoiceResult>(text);
+  if (!text) throw new Error('LLM returned empty response');
+  const parsed = safeJsonParse<ParsedInvoiceResult>(extractJsonObject(text));
   const fallbackSupplierName = extractSupplierFallback(ocrText);
   const fallbackReceiptCode = extractReceiptCodeFallback(ocrText);
   const fallbackReceiptDate = extractDateFallback(ocrText);
@@ -404,7 +499,7 @@ export const invoiceExtract = onRequest(
   {
     timeoutSeconds: 120,
     memory: '512MiB',
-    secrets: [GEMINI_API_KEY],
+    secrets: [SUMOPOD_API_KEY],
   },
   async (req, res): Promise<void> => {
     res.set('Access-Control-Allow-Origin', '*');
@@ -470,13 +565,13 @@ export const invoiceExtract = onRequest(
         return;
       }
 
-      const geminiApiKey = GEMINI_API_KEY.value();
-      if (!geminiApiKey) {
-        sendJson(res, 500, { error: 'Missing GEMINI_API_KEY secret' });
+      const sumopodApiKey = SUMOPOD_API_KEY.value();
+      if (!sumopodApiKey) {
+        sendJson(res, 500, { error: 'Missing SUMOPOD_API_KEY env var' });
         return;
       }
 
-      const parsed = await extractJsonWithGemini(ocrText, geminiApiKey, body.supplierHint);
+      const parsed = await extractJsonWithLlm(ocrText, sumopodApiKey, body.supplierHint);
       const products = await readProducts();
 
       const mappedRows: MappedInvoiceRow[] = parsed.items
@@ -528,14 +623,14 @@ export const invoiceExtract = onRequest(
     } catch (error) {
       logger.error('invoiceExtract failed', error);
       const message = error instanceof Error ? error.message : 'Unknown error';
-      const statusCode = typeof (error as GeminiRequestError)?.statusCode === 'number'
-        ? (error as GeminiRequestError).statusCode!
+      const statusCode = typeof (error as LlmRequestError)?.statusCode === 'number'
+        ? (error as LlmRequestError).statusCode!
         : 500;
       if (statusCode === 429) {
-        const retryAfterSeconds = (error as GeminiRequestError).retryAfterSeconds;
+        const retryAfterSeconds = (error as LlmRequestError).retryAfterSeconds;
         sendJson(res, 429, {
           error: 'gemini_quota_exceeded',
-          message: 'Kuota Gemini API habis atau belum aktif untuk model yang dipakai. Cek billing/tier project atau ganti model.',
+          message: 'Kuota/rate limit AI provider sedang habis. Coba lagi beberapa saat.',
           retryAfterSeconds: retryAfterSeconds || 30,
         });
         return;

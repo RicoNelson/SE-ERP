@@ -62,6 +62,7 @@ export default function Stock() {
   const [lowStockThresholdError, setLowStockThresholdError] = useState('');
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
   const [isDeletingProduct, setIsDeletingProduct] = useState(false);
+  const [openActionMenuProductId, setOpenActionMenuProductId] = useState<string | null>(null);
   const toDateValue = (value: unknown): Date | null => {
     if (!value) return null;
     if (value instanceof Date) return value;
@@ -495,6 +496,7 @@ export default function Stock() {
     if (!(target instanceof Element)) return;
     const details = target.closest('details');
     if (details) details.removeAttribute('open');
+    setOpenActionMenuProductId(null);
   };
 
   return (
@@ -643,7 +645,7 @@ export default function Stock() {
             return (
               <div
                 key={product.id}
-                className="ai-card ai-card-hover stagger-fade-in p-4"
+                className={`ai-card ai-card-hover stagger-fade-in p-4 ${openActionMenuProductId === product.id ? 'z-40' : 'z-0'}`}
                 style={{ animationDelay: `${index * 60}ms` }}
                 onClick={() => setSelectedProductDetail(product)}
               >
@@ -709,7 +711,13 @@ export default function Stock() {
                         </button>
                       </div>
 
-                      <details className="relative md:hidden" onClick={(event) => event.stopPropagation()}>
+                      <details
+                        className="relative md:hidden [&[open]]:z-40"
+                        onClick={(event) => event.stopPropagation()}
+                        onToggle={(event) => {
+                          setOpenActionMenuProductId(event.currentTarget.open ? (product.id ?? null) : null);
+                        }}
+                      >
                         <summary className="ai-button-ghost flex list-none items-center gap-1 rounded-full px-3 py-2 text-sm font-medium text-slate-700 [&::-webkit-details-marker]:hidden">
                           Aksi
                           <ChevronDown className="h-4 w-4" />
