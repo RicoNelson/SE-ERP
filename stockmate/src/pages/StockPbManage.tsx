@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { collection, doc, getDocs, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, where } from 'firebase/firestore';
+import { collection, doc, getDocs, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { ArrowLeft, PackagePlus, Search, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -32,6 +32,7 @@ interface PurchaseSummary {
   id: string;
   receiptCode?: string;
   supplierName?: string;
+  note?: string;
   receiptDate?: Date | null;
   receivedAt?: Date | null;
   totalAmount: number;
@@ -80,6 +81,9 @@ export default function StockPbManage() {
   const [pbAddSellPrice, setPbAddSellPrice] = useState('');
   const [pbAddProductForm, setPbAddProductForm] = useState<ProductFormData>({ ...DEFAULT_PRODUCT_FORM });
   const [pbAddProductFormErrors, setPbAddProductFormErrors] = useState<ProductFormFieldErrors>({});
+  const [pbNoteDraft, setPbNoteDraft] = useState('');
+  const [isEditingPbNote, setIsEditingPbNote] = useState(false);
+  const [isPbNoteSaving, setIsPbNoteSaving] = useState(false);
 
   const normalizedPbSearchQuery = normalizeSearchQuery(pbSearchQuery);
 
@@ -134,6 +138,7 @@ export default function StockPbManage() {
             id: purchaseDoc.id,
             receiptCode: data.receiptCode || '',
             supplierName: data.supplierName || '',
+            note: data.note || '',
             receiptDate: toDateValue(data.receiptDate),
             receivedAt: toDateValue(data.receivedAt),
             totalAmount: data.totalAmount || 0,
@@ -278,6 +283,8 @@ export default function StockPbManage() {
 
   const loadPbDetail = async (purchase: PurchaseSummary) => {
     setSelectedPb(purchase);
+    setPbNoteDraft(purchase.note || '');
+    setIsEditingPbNote(false);
     setPbFieldError(null);
     setRemovedPbItems([]);
     setPbPendingMissingItems([]);
@@ -518,6 +525,41 @@ export default function StockPbManage() {
       return [...prev, item];
     });
     setPbFieldError(null);
+  };
+
+  const handleSavePbNote = async () => {
+    if (userRole !== 'owner') {
+      setPbFieldError('Hanya owner yang dapat memperbarui catatan PB.');
+      return;
+    }
+    if (!selectedPb?.id || isPbNoteSaving) return;
+
+    const selectedPbId = selectedPb.id;
+    const nextNote = pbNoteDraft.trim();
+    setPbFieldError(null);
+    setIsPbNoteSaving(true);
+    try {
+      const purchaseRef = doc(db, 'purchases', selectedPbId);
+      await updateDoc(purchaseRef, {
+        note: nextNote,
+        updatedAt: serverTimestamp(),
+      });
+      setPbList((prev) => prev.map((purchase) => (
+        purchase.id === selectedPbId
+          ? { ...purchase, note: nextNote }
+          : purchase
+      )));
+      setSelectedPb((prev) => {
+        if (!prev || prev.id !== selectedPbId) return prev;
+        return { ...prev, note: nextNote };
+      });
+      setIsEditingPbNote(false);
+    } catch (error) {
+      console.error('Error saving PB note:', error);
+      setPbFieldError('Gagal menyimpan catatan PB.');
+    } finally {
+      setIsPbNoteSaving(false);
+    }
   };
 
   const handleSavePbAdjustments = async () => {
@@ -1034,6 +1076,7 @@ export default function StockPbManage() {
                             )}
                           </div>
                           <p className="mt-1 text-xs text-slate-500">{purchase.supplierName || '-'}</p>
+                          <p className="mt-1 text-xs text-slate-500">Catatan: {purchase.note || '-'}</p>
                           <p className="mt-1 text-xs text-slate-500">
                             {purchase.receiptDate ? purchase.receiptDate.toLocaleDateString('id-ID') : '-'}
                           </p>
@@ -1048,13 +1091,69 @@ export default function StockPbManage() {
                     {isActive && (
                       <div className="relative z-20 mt-2">
                         <section className="ai-card pb-inline-reveal space-y-3 overflow-visible p-5">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Detail PB</p>
                             <h3 className="text-base font-bold text-slate-900">PB {purchase.receiptCode || purchase.id}</h3>
                             <p className="text-xs text-slate-500">{purchase.supplierName || '-'}</p>
+                            {isEditingPbNote && userRole === 'owner' ? (
+                              <div className="mt-2 space-y-2">
+                                <label className="block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                  Catatan PB
+                                </label>
+                                <textarea
+                                  value={pbNoteDraft}
+                                  onChange={(event) => {
+                                    setPbNoteDraft(event.target.value);
+                                    setPbFieldError(null);
+                                  }}
+                                  placeholder="Isi catatan PB (opsional)"
+                                  rows={3}
+                                  className="ai-input w-full px-3 py-2 text-xs"
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={handleSavePbNote}
+                                    disabled={isPbNoteSaving}
+                                    className="ai-button px-3 py-1.5 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {isPbNoteSaving ? 'MENYIMPAN...' : 'Simpan Catatan'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setPbNoteDraft(selectedPb?.note || purchase.note || '');
+                                      setIsEditingPbNote(false);
+                                      setPbFieldError(null);
+                                    }}
+                                    disabled={isPbNoteSaving}
+                                    className="ai-button-ghost px-2 py-1 text-[11px] font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    Batal
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mt-1 flex items-center gap-2">
+                                <p className="text-xs text-slate-500">Catatan: {purchase.note || '-'}</p>
+                                {userRole === 'owner' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setPbNoteDraft(purchase.note || '');
+                                      setIsEditingPbNote(true);
+                                      setPbFieldError(null);
+                                    }}
+                                    className="ai-button-ghost px-2 py-1 text-[11px] font-medium text-sky-700"
+                                  >
+                                    Edit Catatan
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <p className="text-xs text-slate-500">
+                          <p className="shrink-0 text-xs text-slate-500">
                             {purchase.receiptDate ? purchase.receiptDate.toLocaleDateString('id-ID') : '-'}
                           </p>
                         </div>

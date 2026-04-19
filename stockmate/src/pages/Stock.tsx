@@ -50,6 +50,7 @@ export default function Stock() {
   const [opnameQty, setOpnameQty] = useState('');
   const [opnameLayers, setOpnameLayers] = useState<ProductFifoLayer[]>([]);
   const [selectedOpnameLayerId, setSelectedOpnameLayerId] = useState('');
+  const [opnameNote, setOpnameNote] = useState('');
   const [isOpnameLayersLoading, setIsOpnameLayersLoading] = useState(false);
   const [isOpnameProcessing, setIsOpnameProcessing] = useState(false);
   const [opnameFieldErrors, setOpnameFieldErrors] = useState<{ opnameQty?: string; selectedOpnameLayerId?: string }>({});
@@ -215,6 +216,7 @@ export default function Stock() {
     try {
       const newQty = parseNumber(opnameQty);
       const selectedLayerId = selectedOpnameLayerId;
+      const trimmedOpnameNote = opnameNote.trim();
 
       if (!selectedOpnameLayerId) {
         throw new Error('Pilih layer FIFO untuk opname.');
@@ -273,6 +275,7 @@ export default function Stock() {
           }
 
           const movementRef = doc(collection(db, 'stock_movements'));
+          const systemOpnameNote = `Stock opname dari ${formatNumber(previousQty)} ke ${formatNumber(newQty)}`;
           transaction.set(movementRef, {
             productId: editingProduct.id,
             type: 'adjustment',
@@ -283,7 +286,7 @@ export default function Stock() {
             performedAt: serverTimestamp(),
             layerId: targetLayerId || null,
             adjustmentSource: 'existing_layer',
-            note: `Stock opname dari ${formatNumber(previousQty)} ke ${formatNumber(newQty)}`,
+            note: trimmedOpnameNote ? `${systemOpnameNote} • ${trimmedOpnameNote}` : systemOpnameNote,
           });
         }
 
@@ -294,6 +297,7 @@ export default function Stock() {
       });
       setEditingProduct(null);
       setOpnameQty('');
+      setOpnameNote('');
       setSelectedOpnameLayerId('');
       setOpnameFieldErrors({});
     } catch (error) {
@@ -692,6 +696,7 @@ export default function Stock() {
                             event.stopPropagation();
                             setEditingProduct(product);
                             setOpnameQty(product.stockQty.toString());
+                            setOpnameNote('');
                             setOpnameFieldErrors({});
                           }}
                           className="ai-button-ghost inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-sky-700"
@@ -740,6 +745,7 @@ export default function Stock() {
                               closeActionMenu(event.target);
                               setEditingProduct(product);
                               setOpnameQty(product.stockQty.toString());
+                              setOpnameNote('');
                               setOpnameFieldErrors({});
                             }}
                             className="mt-1 flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-sky-700 hover:bg-sky-50"
@@ -817,6 +823,7 @@ export default function Stock() {
             className="ai-modal-backdrop"
             onClick={() => {
               setOpnameFieldErrors({});
+              setOpnameNote('');
               setEditingProduct(null);
             }}
           />
@@ -826,6 +833,7 @@ export default function Stock() {
               <button
                 onClick={() => {
                   setOpnameFieldErrors({});
+                  setOpnameNote('');
                   setEditingProduct(null);
                 }}
                 className="ai-button-ghost rounded-full p-2 text-slate-600"
@@ -898,6 +906,17 @@ export default function Stock() {
                     </p>
                   </>
                 )}
+              </div>
+
+              <div className="mb-4">
+                <label className="mb-2 block text-sm font-medium text-slate-700">Catatan Opname (Opsional)</label>
+                <textarea
+                  value={opnameNote}
+                  onChange={(e) => setOpnameNote(e.target.value)}
+                  rows={3}
+                  className="ai-input w-full px-4 py-3 text-sm"
+                  placeholder="Contoh: Koreksi stok karena selisih hitung gudang"
+                />
               </div>
 
               {parseNumber(opnameQty) - (editingProduct.stockQty || 0) < 0 && selectedOpnameLayerId && (
