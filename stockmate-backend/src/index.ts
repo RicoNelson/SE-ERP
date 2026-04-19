@@ -12,7 +12,8 @@ initializeApp();
 setGlobalOptions({ region: 'asia-southeast1', maxInstances: 10 });
 
 const SUMOPOD_API_URL = 'https://ai.sumopod.com/v1/chat/completions';
-const SUMOPOD_MODEL = 'glm-5';
+const SUMOPOD_MODEL = 'glm-5.1
+';
 const SUMOPOD_API_KEY = defineSecret('SUMOPOD_API_KEY');
 const visionClient = new vision.ImageAnnotatorClient();
 const db = getFirestore();
@@ -344,8 +345,11 @@ const findMatches = (rawName: string, products: ProductRecord[]): { mappedProduc
 };
 
 const extractJsonWithLlm = async (ocrText: string, apiKey: string, supplierHint = ''): Promise<ParsedInvoiceResult> => {
-  const prompt = [
+   logger.info('extractJsonWithLlm', { ocrText, supplierHint });
+   const prompt = [
     'You are extracting supplier invoice data for inventory stock-in.',
+    'Return ONLY one valid JSON object. No prose, no analysis, no reasoning, no markdown, no code fences, no extra characters.',
+    'Never reveal chain-of-thought. Output final JSON only.',
     'Return strict JSON only with this exact shape:',
     '{"supplierName":"","receiptCode":"","receiptDate":"","note":"","items":[{"rawName":"","qty":0,"buyPrice":0}]}',
     'Rules:',
@@ -359,6 +363,8 @@ const extractJsonWithLlm = async (ocrText: string, apiKey: string, supplierHint 
     '- Ignore summary rows such as TOTAL, SUBTOTAL, DISCOUNT, PPN, ONGKIR, DPP',
     '- Do not output rows for payment/bank/shipping/note sections',
     '- Keep rawName concise but specific to product name only',
+    '- If unsure, keep fields empty and return valid JSON shape',
+    '- If no valid item rows are found, return items as []',
     `Supplier hint: ${supplierHint || '-'}`,
     'OCR TEXT:',
     ocrText.slice(0, 24000),
@@ -367,7 +373,7 @@ const extractJsonWithLlm = async (ocrText: string, apiKey: string, supplierHint 
   const llmRequestBody = {
     model: SUMOPOD_MODEL,
     messages: [{ role: 'user', content: prompt }],
-    max_tokens: 1800,
+    max_tokens: 2800,
     temperature: 0.1,
   };
 
