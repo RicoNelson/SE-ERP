@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { collection, doc, getDocs, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { Timestamp, collection, doc, getDoc, getDocs, limit, onSnapshot, orderBy, query, runTransaction, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { ArrowLeft, PackagePlus, Search, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -82,6 +82,7 @@ export default function StockPbManage() {
   const [pbAddProductForm, setPbAddProductForm] = useState<ProductFormData>({ ...DEFAULT_PRODUCT_FORM });
   const [pbAddProductFormErrors, setPbAddProductFormErrors] = useState<ProductFormFieldErrors>({});
   const [pbNoteDraft, setPbNoteDraft] = useState('');
+  const [pbReceiptDateDraft, setPbReceiptDateDraft] = useState('');
   const [isEditingPbNote, setIsEditingPbNote] = useState(false);
   const [isPbNoteSaving, setIsPbNoteSaving] = useState(false);
 
@@ -106,6 +107,14 @@ export default function StockPbManage() {
       return ((value as { toDate: () => Date }).toDate());
     }
     return null;
+  };
+
+  const toDateInputValue = (value: Date | null | undefined): string => {
+    if (!value) return '';
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
 
   const loadPbList = useCallback(async () => {
@@ -284,6 +293,7 @@ export default function StockPbManage() {
   const loadPbDetail = async (purchase: PurchaseSummary) => {
     setSelectedPb(purchase);
     setPbNoteDraft(purchase.note || '');
+    setPbReceiptDateDraft(toDateInputValue(purchase.receiptDate || null));
     setIsEditingPbNote(false);
     setPbFieldError(null);
     setRemovedPbItems([]);
@@ -584,6 +594,15 @@ export default function StockPbManage() {
       setPbFieldError(`Harga jual untuk produk "${invalidSellPriceItem.productNameSnapshot}" wajib lebih dari 0.`);
       return;
     }
+    if (!pbReceiptDateDraft.trim()) {
+      setPbFieldError('Tanggal PB wajib diisi.');
+      return;
+    }
+    const parsedReceiptDate = new Date(`${pbReceiptDateDraft}T00:00:00`);
+    if (Number.isNaN(parsedReceiptDate.getTime())) {
+      setPbFieldError('Format tanggal PB tidak valid.');
+      return;
+    }
     setPbFieldError(null);
     setIsPbSaving(true);
 
@@ -591,7 +610,7 @@ export default function StockPbManage() {
       const purchaseRef = doc(db, 'purchases', selectedPb.id);
       const receiptCode = selectedPb.receiptCode || '-';
       const supplierName = selectedPb.supplierName || '';
-      const receiptDate = selectedPb.receiptDate || null;
+      const receiptDate = Timestamp.fromDate(parsedReceiptDate);
       const preparedItems = combinedEditableItems.map((item) => {
         const nextQuantity = parseNumber(item.draftQuantity);
         const nextUnitCost = parseNumber(item.draftUnitCost);
@@ -631,6 +650,14 @@ export default function StockPbManage() {
       layerSnap.forEach((layerDoc) => {
         const data = layerDoc.data();
         if (data.productId && data.sourceType === 'purchase_receipt') layerByProduct.set(data.productId, layerDoc.id);
+      });
+
+      const affectedProductIds = new Set<string>();
+      preparedItems.forEach((item) => {
+        if (item.productId) affectedProductIds.add(item.productId);
+      });
+      preparedRemovedItems.forEach((item) => {
+        if (item.productId) affectedProductIds.add(item.productId);
       });
 
       await runTransaction(db, async (transaction) => {
@@ -713,6 +740,7 @@ export default function StockPbManage() {
             previousReceived,
             soldQty,
           });
+          if (productId) affectedProductIds.add(productId);
         }
 
         for (const removedItem of preparedRemovedItems) {
@@ -959,12 +987,69 @@ export default function StockPbManage() {
             ...item,
             subtotal: item.quantity * item.unitCost,
           })),
+          receiptDate,
           totalAmount: nextTotal,
           updatedAt: serverTimestamp(),
         });
       });
 
+      const refreshProductLatestPbDate = async (productId: string) => {
+        const productRef = doc(db, 'products', productId);
+        const productSnap = await getDoc(productRef);
+        if (!productSnap.exists()) return;
+
+        const itemQuery = query(
+          collection(db, 'purchase_items'),
+          where('productId', '==', productId),
+          limit(1000),
+        );
+        const itemSnap = await getDocs(itemQuery);
+        const purchaseIds = Array.from(new Set(
+          itemSnap.docs
+            .map((itemDoc) => String(itemDoc.data().purchaseId || ''))
+            .filter(Boolean),
+        ));
+
+        if (purchaseIds.length === 0) {
+          await updateDoc(productRef, {
+            latestPbDate: null,
+            updatedAt: serverTimestamp(),
+          });
+          return;
+        }
+
+        const purchaseSnaps = await Promise.all(
+          purchaseIds.map((purchaseId) => getDoc(doc(db, 'purchases', purchaseId))),
+        );
+        const latestDate = purchaseSnaps.reduce<Date | null>((latest, purchaseSnap) => {
+          if (!purchaseSnap.exists()) return latest;
+          const purchaseData = purchaseSnap.data();
+          const nextDate = toDateValue(purchaseData.receiptDate);
+          if (!nextDate) return latest;
+          if (!latest) return nextDate;
+          return nextDate.getTime() > latest.getTime() ? nextDate : latest;
+        }, null);
+
+        await updateDoc(productRef, {
+          latestPbDate: latestDate ? Timestamp.fromDate(latestDate) : null,
+          updatedAt: serverTimestamp(),
+        });
+      };
+
+      await Promise.all(
+        Array.from(affectedProductIds)
+          .filter(Boolean)
+          .map((productId) => refreshProductLatestPbDate(productId)),
+      );
+
       alert('Perubahan PB berhasil disimpan.');
+      setSelectedPb((prev) => {
+        if (!prev || prev.id !== selectedPb.id) return prev;
+        return {
+          ...prev,
+          receiptDate: parsedReceiptDate,
+        };
+      });
       setPbPendingMissingItems([]);
       const refreshedList = await loadPbList();
       const refreshedSelected = refreshedList.find((item) => item.id === selectedPb.id) || selectedPb;
@@ -977,6 +1062,9 @@ export default function StockPbManage() {
       setIsPbSaving(false);
     }
   };
+
+  const selectedPbReceiptDateInput = toDateInputValue(selectedPb?.receiptDate || null);
+  const hasPbDateChanged = pbReceiptDateDraft !== selectedPbReceiptDateInput;
 
   return (
     <div className="ai-page page-enter">
@@ -1153,9 +1241,28 @@ export default function StockPbManage() {
                               </div>
                             )}
                           </div>
-                          <p className="shrink-0 text-xs text-slate-500">
-                            {purchase.receiptDate ? purchase.receiptDate.toLocaleDateString('id-ID') : '-'}
-                          </p>
+                          <div className="shrink-0">
+                            {userRole === 'owner' ? (
+                              <div className="w-40">
+                                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                                  Tanggal PB
+                                </label>
+                                <input
+                                  type="date"
+                                  value={pbReceiptDateDraft}
+                                  onChange={(event) => {
+                                    setPbReceiptDateDraft(event.target.value);
+                                    setPbFieldError(null);
+                                  }}
+                                  className="ai-input w-full px-2.5 py-1.5 text-xs"
+                                />
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-500">
+                                {purchase.receiptDate ? purchase.receiptDate.toLocaleDateString('id-ID') : '-'}
+                              </p>
+                            )}
+                          </div>
                         </div>
 
                         {isPbDetailLoading ? (
@@ -1524,7 +1631,7 @@ export default function StockPbManage() {
                         {userRole === 'owner' && (
                           <button
                             onClick={handleSavePbAdjustments}
-                            disabled={isPbSaving || isPbDetailLoading || ((pbEditableItems.length + pbPendingMissingItems.length) === 0 && removedPbItems.length === 0)}
+                            disabled={isPbSaving || isPbDetailLoading || (((pbEditableItems.length + pbPendingMissingItems.length) === 0 && removedPbItems.length === 0) && !hasPbDateChanged)}
                             className="ai-button w-full px-4 py-3 font-semibold disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             {isPbSaving ? 'MENYIMPAN PERUBAHAN...' : 'SIMPAN PERUBAHAN PB'}
